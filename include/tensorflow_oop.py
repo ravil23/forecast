@@ -20,20 +20,27 @@ class TFDataset:
     normalization_mask_ = None
     normalization_mean_ = None
     normalization_std_ = None
+    batch_size_ = 1
 
-    def __init__(self, data=None, labels=None, batch_size=1):
+    def __init__(self, data=None, labels=None):
         if data is not None and labels is not None:
-            self.set(data, labels, batch_size)
+            self.set_data_labels(data, labels)
         else:
             for attr in self.__slots__:
                 if attr != 'init_' and attr != 'batch_num_':
                     setattr(self, attr, None)
-        
-    def set(self, data, labels, batch_size=1):
-        """Set values."""
-        assert(len(data) == len(labels))
+    
+    def set_batch_size(self, batch_size):
+        """Set batch size."""
         assert(batch_size > 0)
-        assert(batch_size <=  len(data))
+        assert(self.init_)
+        assert(batch_size <=  self.size_)
+        self.batch_size_ = batch_size
+        self.batch_count_ = int(self.size_ / self.batch_size_)
+
+    def set_data_labels(self, data, labels):
+        """Set data and labels."""
+        assert(len(data) == len(labels))
         
         data = np.array(data)
         labels = np.array(labels)
@@ -51,7 +58,6 @@ class TFDataset:
         self.labels_shape_ = list(self.labels_.shape)
         self.data_ndim_ = len(self.data_shape_) - 1
         self.labels_ndim_ = len(self.labels_shape_) - 1
-        self.batch_size_ = batch_size
         self.batch_count_ = int(self.size_ / self.batch_size_)
         self.init_ = True
         
@@ -111,17 +117,20 @@ class TFDataset:
         if shuffle:
             self.shuffle()
         if train_size > 0:
-            train_set = TFDataset(self.data_[:train_size], self.labels_[:train_size], self.batch_size_)
+            train_set = TFDataset(self.data_[:train_size], self.labels_[:train_size])
+            train_set.set_batch_size(self.batch_size_)
         else:
-            train_set = None
+            train_set = TFDataset()
         if val_size > 0:
-            val_set = TFDataset(self.data_[train_size:train_size + val_size], self.labels_[train_size:train_size + val_size], self.batch_size_)
+            val_set = TFDataset(self.data_[train_size:train_size + val_size], self.labels_[train_size:train_size + val_size])
+            val_set.set_batch_size(self.batch_size_)
         else:
-            val_set = None
+            val_set = TFDataset()
         if test_size > 0:
-            test_set = TFDataset(self.data_[-test_size:], self.labels_[-test_size:], self.batch_size_)
+            test_set = TFDataset(self.data_[-test_size:], self.labels_[-test_size:])
+            test_set.set_batch_size(self.batch_size_)
         else:
-            test_set = None
+            test_set = TFDataset()
         return train_set, val_set, test_set
     
     def load(self, filename):

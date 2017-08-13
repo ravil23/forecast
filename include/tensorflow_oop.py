@@ -7,88 +7,6 @@ import time
 import pickle
 from tensorflow.contrib.tensorboard.plugins import projector
 
-class TFSequence:
-    __slots__ = ['init_', 'size_',
-    'features_', 'features_shape_', 'features_ndim_']
-
-    init_ = False
-
-    def __init__(self, features=None):
-        if features is not None:
-            self.set_features(features)
-        else:
-            for attr in self.__slots__:
-                if attr != 'init_':
-                    setattr(self, attr, None)
-
-    def set_features(self, features):
-        """Set features."""        
-        features = np.array(features)
-        
-        self.size_ = len(features)
-        if features.ndim == 1:
-            self.features_ = np.reshape(features, (self.size_, 1))
-        else:
-            self.features_ = features
-        self.features_shape_ = list(self.features_.shape)
-        self.features_ndim_ = len(self.features_shape_) - 1
-        self.init_ = True
-
-    def create_dataset(self, sequence_length, sequence_step, label_length, label_offset):
-        """
-        Create prediction sequences.
-        Input:
-            features : pandas.core.frame.DataFrame
-            sequence_length : int
-            sequence_step : int
-            label_length : int
-            label_offset : int
-        Output:
-            dataset : TFDataset
-        """
-        assert(self.init_)
-        assert(sequence_length > 0)
-        assert(sequence_step > 0)
-        sequences = None
-        labels = None
-        last = self.size_ - sequence_length - label_length - label_offset
-        for i in xrange(0, last, sequence_step):
-            last_sequence_index = i + sequence_length
-            current_sequence = self.features_[i : last_sequence_index][np.newaxis, ...]
-            if sequences is None:
-                sequences = current_sequence
-            else:
-                sequences = np.vstack([sequences, current_sequence])
-            first_label_index = last_sequence_index + label_offset
-            current_label = self.features_[first_label_index : first_label_index + label_length][np.newaxis, ...]
-            if labels is None:
-                labels = current_label
-            else:
-                labels = np.vstack([labels, current_label])
-        return TFDataset(sequences, labels)
-
-    def load(self, filename):
-        """Load sequence from file."""
-        with open(filename, 'rb') as f:
-            obj = pickle.load(f)
-            for attr in self.__slots__:
-                setattr(self, attr, getattr(obj, attr))
-
-    def save(self, filename):
-        """Save sequence to file."""
-        assert(self.init_)
-        with open(filename, 'wb') as f:
-            pickle.dump(self, f)
-
-    def __str__(self):
-        string = "TFSequence object:\n"
-        for attr in self.__slots__:
-            if attr != 'features_':
-                string += "%20s: %s\n" % (attr, getattr(self, attr))
-        if 'features_' in self.__slots__:
-            string += "%20s: \n%s\n" % ('features_', getattr(self, 'features_'))
-        return string
-
 class TFDataset:
     __slots__ = ['init_', 'size_',
     'data_', 'data_shape_', 'data_ndim_',
@@ -96,16 +14,28 @@ class TFDataset:
     'batch_size_', 'batch_count_', 'batch_num_',
     'normalized_', 'normalization_mask_', 'normalization_mean_', 'normalization_std_']
 
-    batch_num_ = 0
     init_ = False
+    size_ = None
+
+    data_ = None
+    data_shape_ = None
+    data_ndim_ = None
+
+    labels_ = None
+    labels_shape_ = None
+    labels_ndim_ = None
+
+    batch_size_ = 1
+    batch_count_ = None
+    batch_num_ = 0
+
     normalized_ = False
     normalization_mask_ = None
     normalization_mean_ = None
     normalization_std_ = None
-    batch_size_ = 1
-
+    
     def __init__(self, data=None, labels=None):
-        if data is not None and labels is not None:
+        if data is not None:
             self.set_data_labels(data, labels)
         else:
             for attr in self.__slots__:
@@ -122,24 +52,25 @@ class TFDataset:
 
     def set_data_labels(self, data, labels):
         """Set data and labels."""
-        assert(len(data) == len(labels))
-        
-        data = np.array(data)
-        labels = np.array(labels)
-        
-        self.size_ = len(data)
-        if data.ndim == 1:
-            self.data_ = np.reshape(data, (self.size_, 1))
-        else:
-            self.data_ = data
-        if labels.ndim == 1:
-            self.labels_ = np.reshape(labels, (self.size_, 1))
-        else:
-            self.labels_ = labels
-        self.data_shape_ = list(self.data_.shape)
-        self.labels_shape_ = list(self.labels_.shape)
-        self.data_ndim_ = len(self.data_shape_) - 1
-        self.labels_ndim_ = len(self.labels_shape_) - 1
+        assert(data is None or labels is None or len(data) == len(labels))
+        if data is not None:
+            data = np.asarray(data)
+            if data.ndim == 1:
+                self.data_ = np.reshape(data, (self.size_, 1))
+            else:
+                self.data_ = data
+            self.data_shape_ = list(self.data_.shape[1:])
+            self.data_ndim_ = len(self.data_shape_) - 1
+            self.size_ = len(data)
+        if labels is not None:
+            labels = np.asarray(labels)
+            if labels.ndim == 1:
+                self.labels_ = np.reshape(labels, (self.size_, 1))
+            else:
+                self.labels_ = labels
+            self.labels_shape_ = list(self.labels_.shape[1:])
+            self.labels_ndim_ = len(self.labels_shape_) - 1
+            self.size_ = len(labels)
         self.batch_count_ = int(self.size_ / self.batch_size_)
         self.init_ = True
         
@@ -228,9 +159,51 @@ class TFDataset:
         with open(filename, 'wb') as f:
             pickle.dump(self, f)
 
-    def normalize(self, mask=None):
+    def generate_sequences(self, sequence_length, sequence_step, label_length=None, label_offset=None):
         """
-        Normalize dataset to zero mean and one std by mask.
+        Create prediction sequences.
+        Input:
+            features : pandas.core.frame.DataFrame
+            sequence_length : int
+            sequence_step : int
+            label_length : int
+            label_offset : int
+        Output:
+            dataset : TFDataset
+        """
+        assert(self.init_)
+        assert(sequence_length > 0)
+        assert(sequence_step > 0)
+        assert(label_length is None or label_length > 0)
+        if label_length is not None:
+            sequences = []
+            labels = []
+            last = self.size_ - sequence_length - label_length - label_offset
+            for i in xrange(0, last, sequence_step):
+                last_sequence_index = i + sequence_length
+                current_sequence = self.data_[i : last_sequence_index]
+                sequences.append(current_sequence)
+                first_label_index = last_sequence_index + label_offset
+                current_label = self.data_[first_label_index : first_label_index + label_length]
+                labels.append(current_label)
+            dataset = TFDataset(sequences, labels)
+        else:
+            sequences = []
+            last = self.size_ - sequence_length
+            for i in xrange(0, last, sequence_step):
+                last_sequence_index = i + sequence_length
+                current_sequence = self.data_[i : last_sequence_index]
+                sequences.append(current_sequence)
+            dataset = TFDataset(sequences)
+        dataset.normalized_ = self.normalized_
+        dataset.normalization_mask_ = [False] + self.normalization_mask_
+        dataset.normalization_mean_ = self.normalization_mean_
+        dataset.normalization_std_ = self.normalization_std_
+        return dataset
+
+    def normalize_data(self, mask=None):
+        """
+        Normalize data to zero mean and one std by mask.
         Where mask is boolean indicators corresponding to data dimensions.
         If mask value is True, then feature with this dimension should be normalized.
         """
@@ -240,12 +213,12 @@ class TFDataset:
             assert(len(mask) == self.data_.ndim)
 
             # Reshape to array of features
-            data_shape_arr = np.asarray(self.data_shape_)
+            data_shape_arr = np.asarray(self.data_.shape)
             new_shape = [-1] + list(data_shape_arr[mask])
             reshaped_data = np.reshape(self.data_, new_shape)
 
             # Save normalisation properties
-            self.normalization_mask_ = mask
+            self.normalization_mask_ = list(mask)
             self.normalization_mean_ = np.mean(reshaped_data, axis=0)
             self.normalization_std_ = np.std(reshaped_data, axis=0)
 
@@ -263,7 +236,7 @@ class TFDataset:
             self.data_ = (self.data_ - reshaped_normalization_mean_) / valid_normalization_std_
         else:
             # Save normalisation properties
-            self.normalization_mask_ = mask
+            self.normalization_mask_ = list(mask)
             self.normalization_mean_ = np.mean(self.data_)
             self.normalization_std_ = np.std(self.data_)
 
@@ -271,12 +244,12 @@ class TFDataset:
             self.data_ = (self.data_ - self.normalization_mean_) / self.normalization_std_
         self.normalized_ = True
 
-    def unnormalize(self):
+    def unnormalize_data(self):
         """Unnormalize dataset to original from zero mean and one std."""
         if not self.normalized_:
             return
         if self.normalization_mask_ is not None:
-            data_shape_arr = np.asarray(self.data_shape_)
+            data_shape_arr = np.asarray(self.data_.shape)
 
             # Reshape for correct broadcasting
             valid_shape = data_shape_arr
@@ -318,6 +291,9 @@ class TFNeuralNetwork(object):
         if tf.gfile.Exists(self.log_dir_):
             tf.gfile.DeleteRecursively(self.log_dir_)
         tf.gfile.MakeDirs(self.log_dir_)
+
+        # Reset default graph.
+        tf.reset_default_graph()
         
         # Input and Output layer shapes.
         self.inputs_shape_ = list(inputs_shape)
@@ -328,7 +304,7 @@ class TFNeuralNetwork(object):
 
         # Generate placeholders for the data and labels.
         self.data_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.inputs_shape_, name="data")
-        self.labels_placeholder_ = tf.placeholder(tf.int32, shape=[None] + self.outputs_shape_, name="labels")
+        self.labels_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.outputs_shape_, name="labels")
 
         # Build a Graph that computes predictions from the inference model.
         self.outputs_ = self.inference(self.data_placeholder_, self.kwargs_)

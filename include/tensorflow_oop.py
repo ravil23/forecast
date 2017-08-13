@@ -102,7 +102,12 @@ class TFDataset:
         assert(train_size >= 0)
         assert(val_size >= 0)
         assert(test_size >= 0)
-        assert(train_size + val_size + test_size == self.size_)
+        total_size = train_size + val_size + test_size
+        assert(total_size == self.size_ or total_size == 1)
+        if total_size == 1:
+            train_size = int(float(train_size) * self.size_)
+            test_size = int(float(test_size) * self.size_)
+            val_size = self.size_ - train_size - test_size
         if shuffle:
             self.shuffle()
         if train_size > 0:

@@ -8,10 +8,18 @@ import pickle
 from tensorflow.contrib.tensorboard.plugins import projector
 
 class TFDataset:
-    __slots__ = ['init_', 'size_', 'data_', 'labels_', 'data_shape_', 'labels_shape_', 'batch_size_', 'batch_count_', 'batch_num_']
+    __slots__ = ['init_', 'size_',
+    'data_', 'data_shape_', 'data_ndim_',
+    'labels_', 'labels_shape_', 'labels_ndim_',
+    'batch_size_', 'batch_count_', 'batch_num_',
+    'normalized_', 'normalization_mask_', 'normalization_mean_', 'normalization_std_']
 
     batch_num_ = 0
     init_ = False
+    normalized_ = False
+    normalization_mask_ = None
+    normalization_mean_ = None
+    normalization_std_ = None
 
     def __init__(self, data=None, labels=None, batch_size=1):
         if data is not None and labels is not None:
@@ -123,11 +131,83 @@ class TFDataset:
         assert(self.init_)
         with open(filename, 'wb') as f:
             pickle.dump(self, f)
-        
+
+    def normalize(self, mask=None):
+        """
+        Normalize dataset to zero mean and one std by mask.
+        Where mask is boolean indicators corresponding to data dimensions.
+        If mask value is True, then feature with this dimension should be normalized.
+        """
+        if self.normalized_:
+            return
+        if mask is not None:
+            assert(len(mask) == self.data_.ndim)
+
+            # Reshape to array of features
+            data_shape_arr = np.asarray(self.data_shape_)
+            new_shape = [-1] + list(data_shape_arr[mask])
+            reshaped_data = np.reshape(self.data_, new_shape)
+
+            # Save normalisation properties
+            self.normalization_mask_ = mask
+            self.normalization_mean_ = np.mean(reshaped_data, axis=0)
+            self.normalization_std_ = np.std(reshaped_data, axis=0)
+
+            # Reshape for correct broadcasting
+            valid_shape = data_shape_arr
+            valid_shape[np.logical_not(self.normalization_mask_)] = 1
+            reshaped_normalization_mean_ = np.reshape(self.normalization_mean_, valid_shape)
+            reshaped_normalization_std_ = np.reshape(self.normalization_std_, valid_shape)
+
+            # Replace zero std with one
+            valid_normalization_std_ = reshaped_normalization_std_
+            valid_normalization_std_[reshaped_normalization_std_ == 0] = 1
+
+            # Update dataset with normalized value
+            self.data_ = (self.data_ - reshaped_normalization_mean_) / valid_normalization_std_
+        else:
+            # Save normalisation properties
+            self.normalization_mask_ = mask
+            self.normalization_mean_ = np.mean(self.data_)
+            self.normalization_std_ = np.std(self.data_)
+
+            # Update dataset with normalized value
+            self.data_ = (self.data_ - self.normalization_mean_) / self.normalization_std_
+        self.normalized_ = True
+
+    def unnormalize(self):
+        """Unnormalize dataset to original from zero mean and one std."""
+        if not self.normalized_:
+            return
+        if self.normalization_mask_ is not None:
+            data_shape_arr = np.asarray(self.data_shape_)
+
+            # Reshape for correct broadcasting
+            valid_shape = data_shape_arr
+            valid_shape[np.logical_not(self.normalization_mask_)] = 1
+            reshaped_normalization_mean_ = np.reshape(self.normalization_mean_, valid_shape)
+            reshaped_normalization_std_ = np.reshape(self.normalization_std_, valid_shape)
+
+            # Replace zero std with one 
+            valid_normalization_std_ = reshaped_normalization_std_
+            valid_normalization_std_[reshaped_normalization_std_ == 0] = 1
+
+            # Update dataset with unnormalized value
+            self.data_ = self.data_ * valid_normalization_std_ +  reshaped_normalization_mean_
+        else:
+            # Update dataset with unnormalized value
+            self.data_ =  self.data_ * self.normalization_std_ +  self.normalization_mean_
+        self.normalized_ = False
+
     def __str__(self):
         string = "TFDataset object:\n"
         for attr in self.__slots__:
-            string += "%20s: %s\n" % (attr, getattr(self, attr))
+            if attr != 'data_' and attr != 'labels_':
+                string += "%20s: %s\n" % (attr, getattr(self, attr))
+        if 'data_' in self.__slots__:
+            string += "%20s: \n%s\n" % ('data_', getattr(self, 'data_'))
+        if 'labels_' in self.__slots__:
+            string += "%20s: \n%s\n" % ('labels_', getattr(self, 'labels_'))
         return string
 
 class TFNeuralNetwork(object):

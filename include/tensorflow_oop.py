@@ -7,6 +7,88 @@ import time
 import pickle
 from tensorflow.contrib.tensorboard.plugins import projector
 
+class TFSequence:
+    __slots__ = ['init_', 'size_',
+    'features_', 'features_shape_', 'features_ndim_']
+
+    init_ = False
+
+    def __init__(self, features=None):
+        if features is not None:
+            self.set_features(features)
+        else:
+            for attr in self.__slots__:
+                if attr != 'init_':
+                    setattr(self, attr, None)
+
+    def set_features(self, features):
+        """Set features."""        
+        features = np.array(features)
+        
+        self.size_ = len(features)
+        if features.ndim == 1:
+            self.features_ = np.reshape(features, (self.size_, 1))
+        else:
+            self.features_ = features
+        self.features_shape_ = list(self.features_.shape)
+        self.features_ndim_ = len(self.features_shape_) - 1
+        self.init_ = True
+
+    def create_dataset(self, sequence_length, sequence_step, label_length, label_offset):
+        """
+        Create prediction sequences.
+        Input:
+            features : pandas.core.frame.DataFrame
+            sequence_length : int
+            sequence_step : int
+            label_length : int
+            label_offset : int
+        Output:
+            dataset : TFDataset
+        """
+        assert(self.init_)
+        assert(sequence_length > 0)
+        assert(sequence_step > 0)
+        sequences = None
+        labels = None
+        last = self.size_ - sequence_length - label_length - label_offset
+        for i in xrange(0, last, sequence_step):
+            last_sequence_index = i + sequence_length
+            current_sequence = self.features_[i : last_sequence_index][np.newaxis, ...]
+            if sequences is None:
+                sequences = current_sequence
+            else:
+                sequences = np.vstack([sequences, current_sequence])
+            first_label_index = last_sequence_index + label_offset
+            current_label = self.features_[first_label_index : first_label_index + label_length][np.newaxis, ...]
+            if labels is None:
+                labels = current_label
+            else:
+                labels = np.vstack([labels, current_label])
+        return TFDataset(sequences, labels)
+
+    def load(self, filename):
+        """Load sequence from file."""
+        with open(filename, 'rb') as f:
+            obj = pickle.load(f)
+            for attr in self.__slots__:
+                setattr(self, attr, getattr(obj, attr))
+
+    def save(self, filename):
+        """Save sequence to file."""
+        assert(self.init_)
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
+
+    def __str__(self):
+        string = "TFSequence object:\n"
+        for attr in self.__slots__:
+            if attr != 'features_':
+                string += "%20s: %s\n" % (attr, getattr(self, attr))
+        if 'features_' in self.__slots__:
+            string += "%20s: \n%s\n" % ('features_', getattr(self, 'features_'))
+        return string
+
 class TFDataset:
     __slots__ = ['init_', 'size_',
     'data_', 'data_shape_', 'data_ndim_',

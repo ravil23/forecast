@@ -1,11 +1,198 @@
 import tensorflow as tf
 import numpy as np
+import pandas as pd
 import warnings
 import math
 import os
 import time
 import pickle
 from tensorflow.contrib.tensorboard.plugins import projector
+
+class TFDataframe:
+    __slots__ = ['init_', 'size_', 'df_',
+    'batch_size_', 'batch_count_', 'batch_num_',
+    'normalized_', 'normalization_mean_', 'normalization_std_']
+
+    init_ = False
+    size_ = None
+
+    df_ = None
+
+    batch_size_ = 1
+    batch_count_ = None
+    batch_num_ = 0
+
+    normalized_ = False
+    normalization_mean_ = None
+    normalization_std_ = None
+    
+    def __init__(self, df=None, feature_columns=None, label_columns=None):
+        if df is not None:
+            self.set_df(df)
+    
+    def set_batch_size(self, batch_size):
+        """Set batch size."""
+        assert(batch_size > 0)
+        assert(self.init_)
+        assert(batch_size <=  self.size_)
+        self.batch_size_ = batch_size
+        self.batch_count_ = int(self.size_ / self.batch_size_)
+
+    def set_df(self, df):
+        """Set dataframe."""
+        assert(isinstance(df, pd.DataFrame))
+        self.df_ = df
+        self.size_ = len(df)
+        self.batch_count_ = int(self.size_ / self.batch_size_)
+        self.init_ = True
+        
+    def shuffle(self):
+        """Random shuffling dataframe."""
+        assert(self.init_)
+        df = df.sample(frac=1)
+    
+    def next_batch(self):
+        """Get next batch."""
+        assert(self.init_)
+        first = (self.batch_num_ * self.batch_size_) % self.size_
+        last = first + self.batch_size_
+        batch_df = None
+        if (last <= self.size_):
+            batch_df = self.df_.iloc[first:last]
+        else:
+            batch_df = pd.concat([self.df_.iloc[first:], self.df_.iloc[:last - self.size_]])
+        self.batch_num_ += 1
+        return batch_df
+    
+    def batches(self, count=None):
+        """Get iterator by batches."""
+        assert(self.init_)
+        i = 0
+        while i + self.batch_size_ <= self.size_:
+            batch_df = self.df_.iloc[i : i + self.batch_size_]
+            yield batch_df
+            i += self.batch_size_
+            if count is not None and i >= count:
+                return
+    
+    def split(self, train_size, val_size, test_size, shuffle=True):
+        """Split dataset to train, validation and test set."""
+        assert(self.init_)
+        assert(train_size >= 0)
+        assert(val_size >= 0)
+        assert(test_size >= 0)
+        total_size = train_size + val_size + test_size
+        assert(total_size == self.size_ or total_size == 1)
+        if total_size == 1:
+            train_size = int(float(train_size) * self.size_)
+            test_size = int(float(test_size) * self.size_)
+            val_size = self.size_ - train_size - test_size
+        if shuffle:
+            self.shuffle()
+        if train_size > 0:
+            train_set = TFDataframe(self.df_[:train_size])
+            train_set.set_batch_size(self.batch_size_)
+        else:
+            train_set = TFDataset()
+        if val_size > 0:
+            val_set = TFDataset(self.df_[train_size : train_size + val_size])
+            val_set.set_batch_size(self.batch_size_)
+        else:
+            val_set = TFDataset()
+        if test_size > 0:
+            test_set = TFDataset(self.df_[-test_size:])
+            test_set.set_batch_size(self.batch_size_)
+        else:
+            test_set = TFDataset()
+        return train_set, val_set, test_set
+
+    def copy(self, dataframe):
+        """Copy dataframe."""
+        for attr in self.__slots__:
+            setattr(self, attr, getattr(dataframe, attr))
+
+    def load(self, filename):
+        """Load dataframe from file."""
+        with open(filename, 'rb') as f:
+            obj = pickle.load(f)
+            for attr in self.__slots__:
+                setattr(self, attr, getattr(obj, attr))
+
+    def save(self, filename):
+        """Save dataframe to file."""
+        assert(self.init_)
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
+            
+    def interpolate(self):
+        """Interpolate NaN values."""
+        self.df_ = self.df_.interpolate()
+
+    def generate_sequences(self, sequence_length, sequence_step, label_length=None, label_offset=None):
+        """
+        Create prediction sequences.
+        Input:
+            sequence_length : int
+            sequence_step : int
+            label_length : int
+            label_offset : int
+        Output:
+            dataset : TFDataset
+        """
+        assert(self.init_)
+        assert(sequence_length > 0)
+        assert(sequence_step > 0)
+        assert(label_length is None or (label_length > 0 and label_offset is not None))
+        if label_length is not None:
+            sequences = []
+            labels = []
+            last = self.size_ - sequence_length - label_length - label_offset
+            for i in xrange(0, last, sequence_step):
+                last_sequence_index = i + sequence_length
+                current_sequence = self.df_.iloc[i : last_sequence_index].values
+                sequences.append(current_sequence)
+                first_label_index = last_sequence_index + label_offset
+                current_label = self.df_.iloc[first_label_index : first_label_index + label_length].values
+                labels.append(current_label)
+            dataset = TFDataset(sequences, labels)
+        else:
+            sequences = []
+            last = self.size_ - sequence_length
+            for i in xrange(0, last, sequence_step):
+                last_sequence_index = i + sequence_length
+                current_sequence = self.df_.iloc[i : last_sequence_index].values
+                sequences.append(current_sequence)
+            dataset = TFDataset(sequences)
+        dataset.normalized_ = self.normalized_
+        dataset.normalization_mask_ = [False] + [True] * (self.df_.ndim - 1)
+        dataset.normalization_mean_ = self.normalization_mean_.values
+        dataset.normalization_std_ = self.normalization_std_.values
+        return dataset
+
+    def normalize(self):
+        """Normalize dataframe to zero mean and one std."""
+        if self.normalized_:
+            return
+        self.normalization_mean_ = self.df_.mean()
+        self.normalization_std_ = self.df_.std()
+        self.df_ = (self.df_ - self.normalization_mean_) / self.normalization_std_
+        self.normalized_ = True
+
+    def unnormalize(self):
+        """Unnormalize dataframe to original from zero mean and one std."""
+        if not self.normalized_:
+            return
+        self.df_ =  self.df_ * self.normalization_std_ +  self.normalization_mean_
+        self.normalized_ = False
+
+    def __str__(self):
+        string = "TFDataframe object:\n"
+        for attr in self.__slots__:
+            if attr != 'df_':
+                string += "%20s: %s\n" % (attr, getattr(self, attr))
+        if 'df_' in self.__slots__:
+            string += "%20s: \n%s\n" % ('df_', self.df_.head())
+        return string
 
 class TFDataset:
     __slots__ = ['init_', 'size_',
@@ -37,10 +224,11 @@ class TFDataset:
     def __init__(self, data=None, labels=None):
         if data is not None:
             self.set_data_labels(data, labels)
-        else:
-            for attr in self.__slots__:
-                if attr != 'init_' and attr != 'batch_num_':
-                    setattr(self, attr, None)
+    
+    def copy(self, dataset):
+        """Copy dataset."""
+        for attr in self.__slots__:
+            setattr(self, attr, getattr(dataset, attr))
     
     def set_batch_size(self, batch_size):
         """Set batch size."""
@@ -163,7 +351,6 @@ class TFDataset:
         """
         Create prediction sequences.
         Input:
-            features : pandas.core.frame.DataFrame
             sequence_length : int
             sequence_step : int
             label_length : int
@@ -174,7 +361,7 @@ class TFDataset:
         assert(self.init_)
         assert(sequence_length > 0)
         assert(sequence_step > 0)
-        assert(label_length is None or label_length > 0)
+        assert(label_length is None or (label_length > 0 and label_offset is not None))
         if label_length is not None:
             sequences = []
             labels = []

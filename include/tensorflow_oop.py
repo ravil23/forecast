@@ -85,25 +85,25 @@ class TFDataframe:
         assert(total_size == self.size_ or total_size == 1)
         if total_size == 1:
             train_size = int(float(train_size) * self.size_)
-            test_size = int(float(test_size) * self.size_)
-            val_size = self.size_ - train_size - test_size
+            val_size = int(float(val_size) * self.size_)
+            test_size = self.size_ - train_size - val_size
         if shuffle:
             self.shuffle()
         if train_size > 0:
             train_set = TFDataframe(self.df_[:train_size])
             train_set.set_batch_size(self.batch_size_)
         else:
-            train_set = TFDataframe()
+            train_set = None
         if val_size > 0:
             val_set = TFDataframe(self.df_[train_size : train_size + val_size])
             val_set.set_batch_size(self.batch_size_)
         else:
-            val_set = TFDataframe()
+            val_set = None
         if test_size > 0:
             test_set = TFDataframe(self.df_[-test_size:])
             test_set.set_batch_size(self.batch_size_)
         else:
-            test_set = TFDataframe()
+            test_set = None
         return train_set, val_set, test_set
 
     def copy(self, dataframe):
@@ -193,7 +193,7 @@ class TFDataframe:
                 string += "%20s: %s\n" % (attr, getattr(self, attr))
         if 'df_' in self.__slots__:
             string += "%20s: \n%s\n" % ('df_', self.df_.head())
-        return string
+        return string[:-1]
 
 class TFDataset:
     __slots__ = ['init_', 'size_',
@@ -322,17 +322,17 @@ class TFDataset:
             train_set = TFDataset(self.data_[:train_size], self.labels_[:train_size])
             train_set.set_batch_size(self.batch_size_)
         else:
-            train_set = TFDataset()
+            train_set = None
         if val_size > 0:
             val_set = TFDataset(self.data_[train_size:train_size + val_size], self.labels_[train_size:train_size + val_size])
             val_set.set_batch_size(self.batch_size_)
         else:
-            val_set = TFDataset()
+            val_set = None
         if test_size > 0:
             test_set = TFDataset(self.data_[-test_size:], self.labels_[-test_size:])
             test_set.set_batch_size(self.batch_size_)
         else:
-            test_set = TFDataset()
+            test_set = None
         return train_set, val_set, test_set
     
     def load(self, filename):
@@ -465,7 +465,7 @@ class TFDataset:
             string += "%20s: \n%s\n" % ('data_', getattr(self, 'data_'))
         if 'labels_' in self.__slots__:
             string += "%20s: \n%s\n" % ('labels_', getattr(self, 'labels_'))
-        return string
+        return string[:-1]
 
 class TFNeuralNetwork(object):
     __slots__ = ['inputs_shape_', 'outputs_shape_', 'data_placeholder_', 'labels_placeholder_', 'outputs_', 'metrics_', 'loss_',
@@ -545,11 +545,13 @@ class TFNeuralNetwork(object):
 
         assert(epoch_count > 0)
         assert(isinstance(train_set, TFDataset))
-        assert(val_set is None or isinstance(val_set, TFDataset))
-        assert(val_set is None or train_set.data_ndim_ == val_set.data_ndim_)
-        assert(val_set is None or train_set.labels_ndim_ == val_set.labels_ndim_)
-        assert(val_set is None or np.all(np.array(train_set.labels_shape_[1:]) == np.array(val_set.labels_shape_[1:])))
-        assert(val_set is None or np.all(np.array(train_set.data_shape_[1:]) == np.array(val_set.data_shape_[1:])))
+        if val_set is not None:
+            assert(isinstance(val_set, TFDataset))
+            assert(val_set.init_)
+            assert(train_set.data_ndim_ == val_set.data_ndim_)
+            assert(train_set.labels_ndim_ == val_set.labels_ndim_)
+            assert(np.all(np.array(train_set.labels_shape_[1:]) == np.array(val_set.labels_shape_[1:])))
+            assert(np.all(np.array(train_set.data_shape_[1:]) == np.array(val_set.data_shape_[1:])))
 
         # Checkpoint configuration.
         checkpoint_name = "fit-checkpoint"
@@ -564,8 +566,9 @@ class TFNeuralNetwork(object):
         print('Start training iteration...')
         
         # Start the training loop.
+        start_fit_time = time.time()
         for epoch in range(epoch_count):
-            start_time = time.time()
+            start_epoch_time = time.time()
 
             # Loop over all batches
             for i in range(train_set.batch_count_):
@@ -585,7 +588,7 @@ class TFNeuralNetwork(object):
                 summary_str = self.sess_.run(self.summary_, feed_dict = feed_dict)
                 self.summary_writer_.add_summary(summary_str, epoch)
                 
-            duration = time.time() - start_time
+            duration = time.time() - start_epoch_time
 
             # Write the summaries and print an overview fairly often.
             if (epoch + 1) % summarizing_period == 0:
@@ -594,6 +597,10 @@ class TFNeuralNetwork(object):
                 else:
                     metrics = self.evaluate(train_set)
                 metrics_string = '   '.join([str(key) + ' = %.6f' % metrics[key] for key in metrics])
+                if val_set is not None:
+                    metrics_string = '[validation set]   ' + metrics_string
+                else:
+                    metrics_string = '[training set]   ' + metrics_string
                 print('Epoch %d/%d:   %s   (%.3f sec)' % (epoch + 1, epoch_count, metrics_string, duration))
                 self.summary_writer_.flush()
                 
@@ -601,11 +608,13 @@ class TFNeuralNetwork(object):
             if (epoch + 1) % checkpoint_period == 0 or (epoch + 1) == epoch_count:
                 self.save(checkpoint_file, global_step=epoch)
         
-        print('Finish training iteration.')
+        total_time = time.time() - start_fit_time
+        print('Finish training iteration (total time %.3f sec).\n' % total_time)
             
     def evaluate(self, dataset):
         """Evaluate model."""
         assert(isinstance(dataset, TFDataset))
+        assert(dataset.init_)
         result = {}
         if len(self.metrics_) > 0:
             metric_names = []
@@ -645,7 +654,7 @@ class TFNeuralNetwork(object):
         string = "TFNeuralNetwork object:\n"
         for attr in self.__slots__:
             string += "%20s: %s\n" % (attr, getattr(self, attr))
-        return string
+        return string[:-1]
 
 class TFClassifier(TFNeuralNetwork):
     __slots__ = TFNeuralNetwork.__slots__ + ['probabilities_']

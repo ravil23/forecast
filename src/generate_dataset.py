@@ -75,16 +75,16 @@ def load_dataframe(filename):
     """
     # Read file
     df = pd.read_csv(filename, delimiter=';', quotechar='"')
-    
+
     # Convert string to datetime format
     df['time'] = pd.to_datetime(df.iloc[:,0], format='%d.%m.%Y %H:%M')
-    
+
     # Set time as index
     df = df.set_index('time')
-    
+
     # Resample with timedelta 3 hours and fill new rows with NaN
     df = df.resample('3H').asfreq()
-    
+
     # Preprocessing amount of precipitation
     df['RRR'] = df['RRR'].replace('No precipitation', 0.)
     df['RRR'] = df['RRR'].replace('Trace of precipitation', np.nan)

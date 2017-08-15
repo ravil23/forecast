@@ -93,17 +93,17 @@ class TFDataframe:
             train_set = TFDataframe(self.df_[:train_size])
             train_set.set_batch_size(self.batch_size_)
         else:
-            train_set = TFDataset()
+            train_set = TFDataframe()
         if val_size > 0:
-            val_set = TFDataset(self.df_[train_size : train_size + val_size])
+            val_set = TFDataframe(self.df_[train_size : train_size + val_size])
             val_set.set_batch_size(self.batch_size_)
         else:
-            val_set = TFDataset()
+            val_set = TFDataframe()
         if test_size > 0:
-            test_set = TFDataset(self.df_[-test_size:])
+            test_set = TFDataframe(self.df_[-test_size:])
             test_set.set_batch_size(self.batch_size_)
         else:
-            test_set = TFDataset()
+            test_set = TFDataframe()
         return train_set, val_set, test_set
 
     def copy(self, dataframe):
@@ -163,10 +163,11 @@ class TFDataframe:
                 current_sequence = self.df_.iloc[i : last_sequence_index].values
                 sequences.append(current_sequence)
             dataset = TFDataset(sequences)
-        dataset.normalized_ = self.normalized_
-        dataset.normalization_mask_ = [False] + [True] * (self.df_.ndim - 1)
-        dataset.normalization_mean_ = self.normalization_mean_.values
-        dataset.normalization_std_ = self.normalization_std_.values
+        if self.normalized_:
+            dataset.normalized_ = self.normalized_
+            dataset.normalization_mask_ = [False] + [True] * (self.df_.ndim - 1)
+            dataset.normalization_mean_ = self.normalization_mean_.values
+            dataset.normalization_std_ = self.normalization_std_.values
         return dataset
 
     def normalize(self):

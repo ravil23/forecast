@@ -7,6 +7,19 @@ import os
 import time
 import pickle
 from tensorflow.contrib.tensorboard.plugins import projector
+from tensorflow.python.client import device_lib
+
+def TFHelper:
+    @staticmethod
+    def devices_list():
+        local_device_protos = device_lib.list_local_devices()
+        return [x.name for x in local_device_protos]
+
+    @staticmethod
+    def checkpoints_list(log_dir):
+        """List of all model checkpoint paths."""
+        checkpoint_state = tf.train.get_checkpoint_state(log_dir)
+        return checkpoint_state.all_model_checkpoint_paths
 
 class TFDataframe:
     __slots__ = ['init_', 'size_', 'df_',
@@ -469,75 +482,80 @@ class TFDataset:
 
 class TFNeuralNetwork(object):
     __slots__ = ['inputs_shape_', 'outputs_shape_', 'data_placeholder_', 'labels_placeholder_', 'outputs_', 'metrics_', 'loss_',
-                 'log_dir_', 'sess_', 'kwargs_', 'summary_', 'summary_writer_']
+                 'log_dir_', 'graph_', 'sess_', 'kwargs_', 'summary_', 'summary_writer_', 'device_']
 
-    def __init__(self, log_dir, inputs_shape, outputs_shape, metric_functions={}, kwargs={}):
+    def __init__(self, log_dir, inputs_shape, outputs_shape, device=None, metric_functions={}, kwargs={}):
         print('Start initializing model...')
-        
+
         # TensorBoard logging directory.
         self.log_dir_ = log_dir
         if tf.gfile.Exists(self.log_dir_):
             tf.gfile.DeleteRecursively(self.log_dir_)
         tf.gfile.MakeDirs(self.log_dir_)
 
-        # Reset default graph.
-        tf.reset_default_graph()
-        
-        # Input and Output layer shapes.
-        self.inputs_shape_ = list(inputs_shape)
-        self.outputs_shape_ = list(outputs_shape)
-
         # Arguments.
         self.kwargs_ = kwargs
 
-        # Generate placeholders for the data and labels.
-        self.data_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.inputs_shape_, name="data")
-        self.labels_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.outputs_shape_, name="labels")
+        # Set default graph.
+        self.graph_ = tf.Graph()
+        self.device_ = device
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                
+                # Input and Output layer shapes.
+                self.inputs_shape_ = list(inputs_shape)
+                self.outputs_shape_ = list(outputs_shape)
 
-        # Build a Graph that computes predictions from the inference model.
-        self.outputs_ = self.inference(self.data_placeholder_, self.kwargs_)
+                # Generate placeholders for the data and labels.
+                self.data_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.inputs_shape_, name="input_data")
+                self.labels_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.outputs_shape_, name="input_labels")
 
-        # Loss function.
-        self.loss_ = self.loss_function(self.outputs_, self.labels_placeholder_)
+                # Build a Graph that computes predictions from the inference model.
+                self.outputs_ = tf.identity(self.inference(self.data_placeholder_, self.kwargs_), name="output")
 
-        # Evaluation options.
-        self.metrics_ = {key : metric_functions[key](self.outputs_, self.labels_placeholder_) for key in metric_functions}
-        self.metrics_['loss'] = self.loss_
-        
-        # Build the summary Tensor based on the TF collection of Summaries.
-        for key in self.metrics_:
-            tf.summary.scalar(key, self.metrics_[key])
-        self.summary_ = tf.summary.merge_all()
+                # Loss function.
+                self.loss_ = self.loss_function(self.outputs_, self.labels_placeholder_)
 
-        # Add the variable initializer Op.
-        init = tf.global_variables_initializer()
+                # Evaluation options.
+                self.metrics_ = {key : metric_functions[key](self.outputs_, self.labels_placeholder_) for key in metric_functions}
+                self.metrics_['loss'] = self.loss_
 
-        # Create a session for running Ops on the Graph.
-        self.sess_ = tf.Session()
+                # Build the summary Tensor based on the TF collection of Summaries.
+                for key in self.metrics_:
+                    tf.summary.scalar(key, self.metrics_[key])
+                self.summary_ = tf.summary.merge_all()
 
-        # Instantiate a SummaryWriter to output summaries and the Graph.
-        self.summary_writer_ = tf.summary.FileWriter(self.log_dir_, self.sess_.graph)
+                # Create a session for running Ops on the Graph.
+                self.sess_ = tf.Session()
 
-        # And then after everything is built:
+                # Instantiate a SummaryWriter to output summaries and the Graph.
+                self.summary_writer_ = tf.summary.FileWriter(self.log_dir_, self.sess_.graph)
 
-        # Run the Op to initialize the variables.
-        self.sess_.run(init)
-        
+                # And then after everything is built:
+
+                # Run the Op to initialize the variables.
+                self.sess_.run(tf.global_variables_initializer())
+
         print('Finish initializing model.')
-        
+
     def inference(self, inputs, kwargs={}):
         """Model inference."""
-        raise Exception('Inference function should be overwritten!')
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                raise Exception('Inference function should be overwritten!')
         return outputs
 
     def loss_function(self, outputs, labels_placeholder):
         """Loss function."""
-        raise Exception('Loss function should be overwritten!')
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                raise Exception('Loss function should be overwritten!')
         return loss
 
     def fit(self, train_set, epoch_count,
         optimizer=tf.train.RMSPropOptimizer,
         learning_rate=0.001,
+        iter_count=np.inf,
         val_set=None,
         checkpoint_period=1000,
         summarizing_period=1):
@@ -553,102 +571,133 @@ class TFNeuralNetwork(object):
             assert(np.all(np.array(train_set.labels_shape_[1:]) == np.array(val_set.labels_shape_[1:])))
             assert(np.all(np.array(train_set.data_shape_[1:]) == np.array(val_set.data_shape_[1:])))
 
+        print('Start training iteration...')
+        start_fit_time = time.time()
+
         # Checkpoint configuration.
         checkpoint_name = "fit-checkpoint"
         checkpoint_file = os.path.join(self.log_dir_, checkpoint_name)
-        
-        # Add to the Graph the Ops that calculate and apply gradients.
-        train_op = optimizer(learning_rate).minimize(self.loss_)
-        
-        # Add the variable initializer Op.
-        self.sess_.run(tf.global_variables_initializer())
-        
-        print('Start training iteration...')
-        
-        # Start the training loop.
-        start_fit_time = time.time()
-        for epoch in range(epoch_count):
-            start_epoch_time = time.time()
 
-            # Loop over all batches
-            for i in range(train_set.batch_count_):
-                # Get next batch.
-                batch_data, batch_labels = train_set.next_batch()
+        # Set default graph.
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
 
-                # Fill feed dict.
-                feed_dict = {
-                  self.data_placeholder_: batch_data,
-                  self.labels_placeholder_: batch_labels,
-                }
-                
-                # Run one step of the model training.
-                self.sess_.run(train_op, feed_dict = feed_dict)
-                
-                # Update the events file.
-                summary_str = self.sess_.run(self.summary_, feed_dict = feed_dict)
-                self.summary_writer_.add_summary(summary_str, epoch)
-                
-            duration = time.time() - start_epoch_time
+                # Add to the Graph the Ops that calculate and apply gradients.
+                train_op = optimizer(learning_rate).minimize(self.loss_)
 
-            # Write the summaries and print an overview fairly often.
-            if (epoch + 1) % summarizing_period == 0:
-                if val_set is not None:
-                    metrics = self.evaluate(val_set)
-                else:
-                    metrics = self.evaluate(train_set)
-                metrics_string = '   '.join([str(key) + ' = %.6f' % metrics[key] for key in metrics])
-                if val_set is not None:
-                    metrics_string = '[validation set]   ' + metrics_string
-                else:
-                    metrics_string = '[training set]   ' + metrics_string
-                print('Epoch %d/%d:   %s   (%.3f sec)' % (epoch + 1, epoch_count, metrics_string, duration))
-                self.summary_writer_.flush()
-                
-            # Save a checkpoint and evaluate the model periodically.
-            if (epoch + 1) % checkpoint_period == 0 or (epoch + 1) == epoch_count:
-                self.save(checkpoint_file, global_step=epoch)
-        
+                # Run the Op to initialize the variables.
+                self.sess_.run(tf.variables_initializer([train_op]))
+
+                # Global iteration step.
+                iteration = 0
+
+                # Start the training loop.
+                for epoch in xrange(epoch_count):
+                    start_epoch_time = time.time()
+
+                    # Loop over all batches
+                    for i in xrange(train_set.batch_count_):
+                        # Get next batch.
+                        batch_data, batch_labels = train_set.next_batch()
+
+                        # Fill feed dict.
+                        feed_dict = {
+                            self.data_placeholder_: batch_data,
+                            self.labels_placeholder_: batch_labels,
+                        }
+
+                        # Run one step of the model training.
+                        self.sess_.run(train_op, feed_dict=feed_dict)
+
+                        # Update the events file.
+                        summary_str = self.sess_.run(self.summary_, feed_dict=feed_dict)
+                        self.summary_writer_.add_summary(summary_str, epoch)
+
+                        iteration += 1
+                        if iteration >= iter_count:
+                            break
+
+                    duration = time.time() - start_epoch_time
+
+                    # Write the summaries and print an overview fairly often.
+                    next_epoch = epoch + 1
+                    if next_epoch % summarizing_period == 0:
+                        if val_set is not None:
+                            metrics = self.evaluate(val_set)
+                        else:
+                            metrics = self.evaluate(train_set)
+                        metrics_string = '   '.join([str(key) + ' = %.6f' % metrics[key] for key in metrics])
+                        if val_set is not None:
+                            metrics_string = '[validation set]   ' + metrics_string
+                        else:
+                            metrics_string = '[training set]   ' + metrics_string
+                        print('Epoch %d/%d:   %s   (%.3f sec)' % (next_epoch, epoch_count, metrics_string, duration))
+                        self.summary_writer_.flush()
+
+                    # Save a checkpoint and evaluate the model periodically.
+                    if next_epoch % checkpoint_period == 0 or next_epoch == epoch_count:
+                        self.save(checkpoint_file, global_step=next_epoch)
+
+                    if iteration >= iter_count:
+                        print('Stop by maximum iteration count: %s' % iteration)
+                        break
+
         total_time = time.time() - start_fit_time
         print('Finish training iteration (total time %.3f sec).\n' % total_time)
-            
+
     def evaluate(self, dataset):
         """Evaluate model."""
         assert(isinstance(dataset, TFDataset))
         assert(dataset.init_)
-        result = {}
-        if len(self.metrics_) > 0:
-            metric_names = []
-            metric_values = []
-            for key in self.metrics_:
-                metric_names.append(key)
-                metric_values.append(self.metrics_[key])
-            estimates = self.sess_.run(metric_values, feed_dict = {
-              self.data_placeholder_: dataset.data_,
-              self.labels_placeholder_: dataset.labels_,
-            })
-            for i in xrange(len(self.metrics_)):
-                result[metric_names[i]] = estimates[i]
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                result = {}
+                if len(self.metrics_) > 0:
+                    metric_keys = self.metrics_.keys()
+                    metric_values = self.metrics_.values()
+                    estimates = self.sess_.run(metric_values, feed_dict = {
+                        self.data_placeholder_: dataset.data_,
+                        self.labels_placeholder_: dataset.labels_,
+                    })
+                    for i in xrange(len(self.metrics_)):
+                        result[metric_keys[i]] = estimates[i]
         return result
 
     def save(self, filename, global_step=None):
         """Save checkpoint."""
-        # Create a saver for writing training checkpoints.
-        saver = tf.train.Saver()
-        saver.save(self.sess_, filename, global_step=global_step)
-        print('Model saved to: %s' % filename)
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                saver = tf.train.Saver(max_to_keep=None)
+                saver.save(self.sess_, filename, global_step=global_step)
+                print('Model saved to: %s' % filename)
 
+    def load(self, model_checkpoint_path=None):
+        """Load checkpoint."""
+        if model_checkpoint_path is None:
+            model_checkpoint_path = tf.train.latest_checkpoint(self.log_dir_)
+        assert(model_checkpoint_path is not None)
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                saver = tf.train.import_meta_graph(model_checkpoint_path + '.meta', clear_devices=True)
+                saver.restore(self.sess_, model_checkpoint_path)
+                print('Model loaded from: %s' % model_checkpoint_path)
+    
     def forward(self, inputs_values):
         """Forward propagation."""
         assert(np.all(np.array(inputs_values.shape[1:]) == np.array(self.inputs_shape_)))
-        return self.sess_.run(self.outputs_, feed_dict = {
-          self.data_placeholder_: inputs_values,
-        })
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                return self.sess_.run(self.outputs_, feed_dict={
+                    self.data_placeholder_: inputs_values,
+                })
 
     def top_k(self, inputs_values, k):
         """Top k element."""
-        return self.sess_.run(tf.nn.top_k(self.data_placeholder_, k=k), feed_dict = {
-          self.data_placeholder_: inputs_values,
-        })
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                return self.sess_.run(tf.nn.top_k(self.data_placeholder_, k=k), feed_dict = {
+                    self.data_placeholder_: inputs_values,
+                })
 
     def __str__(self):
         string = "TFNeuralNetwork object:\n"
@@ -667,32 +716,43 @@ class TFClassifier(TFNeuralNetwork):
             metric_functions["accuracy"] = accuracy
 
         super(TFClassifier, self).__init__(log_dir, inputs_shape, outputs_shape, metric_functions, kwargs)
-        self.probabilities_ = tf.nn.softmax(self.outputs_)
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                self.probabilities_ = tf.nn.softmax(self.outputs_)
+                self.sess_.run(tf.variables_initializer([self.probabilities_]))
         
     def loss_function(self, outputs, labels_placeholder):
         """Cross entropy."""
-        return tf.losses.softmax_cross_entropy(labels_placeholder, outputs) 
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                return tf.losses.softmax_cross_entropy(labels_placeholder, outputs) 
 
     def probabilities(self, inputs_values):
         """Get probabilites."""
-        return self.sess_.run(self.probabilities_, feed_dict = {
-          self.data_placeholder_: inputs_values,
-        })
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                return self.sess_.run(self.probabilities_, feed_dict={
+                    self.data_placeholder_: inputs_values,
+                })
 
     def classify(self, inputs_values):
         """Best prediction."""
-        return self.sess_.run(tf.argmax(self.probabilities_, 1), feed_dict = {
-          self.data_placeholder_: inputs_values,
-        })
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                return self.sess_.run(tf.argmax(self.probabilities_, 1), feed_dict={
+                    self.data_placeholder_: inputs_values,
+                })
 
 class TFRegressor(TFNeuralNetwork):
 
     def __init__(self, log_dir, inputs_shape, outputs_shape, metric_functions={}, kwargs={}):
         super(TFRegressor, self).__init__(log_dir, inputs_shape, outputs_shape, metric_functions, kwargs)
-        
+
     def loss_function(self, outputs, labels_placeholder):
         """Mean squared error."""
-        return tf.losses.mean_squared_error(labels_placeholder, outputs)
+        with self.graph_.as_default():
+            with self.graph_.device(self.device_):
+                return tf.losses.mean_squared_error(labels_placeholder, outputs)
 
 class TFEmbeddingTripletLoss(TFNeuralNetwork):
 

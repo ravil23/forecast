@@ -23,17 +23,15 @@ class TFHelper:
         return checkpoint_state.all_model_checkpoint_paths
 
 class TFBatch:
-    __slots__ = []
 
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-            self.__slots__.append(key)
     
     def __str__(self):
         string = "TFBatch object:\n"
-        for attr in self.__slots__:
-            string += "%20s: %s\n" % (attr, getattr(self, attr))
+        for attr in self.__dict__:
+            string += "%s: \n%s\n" % (attr, getattr(self, attr))
         return string[:-1]
 
 class TFDataset:
@@ -61,7 +59,7 @@ class TFDataset:
         if data is not None or labels is not None:
             self.initialize(data=data, labels=labels)
 
-    def deep_copy(self, other):
+    def copy(self, other):
         """Copy other dataframe."""
         for attr in self.__slots__:
             setattr(self, attr, getattr(other, attr))
@@ -179,7 +177,7 @@ class TFDataset:
             np.random.shuffle(indexes)
         if train_size > 0:
             train_set = TFDataset()
-            train_set.deep_copy(self)
+            train_set.copy(self)
             data = self.data_[indexes[:train_size]] if self.data_ is not None else None
             labels = self.labels_[indexes[:train_size]] if self.labels_ is not None else None
             train_set.initialize(data, labels)
@@ -187,7 +185,7 @@ class TFDataset:
             train_set = None
         if val_size > 0:
             val_set = TFDataset()
-            val_set.deep_copy(self)
+            val_set.copy(self)
             data = self.data_[indexes[train_size:train_size + val_size]] if self.data_ is not None else None
             labels = self.labels_[indexes[train_size:train_size + val_size]] if self.labels_ is not None else None
             val_set.initialize(data, labels)
@@ -195,7 +193,7 @@ class TFDataset:
             val_set = None
         if test_size > 0:
             test_set = TFDataset()
-            test_set.deep_copy(self)
+            test_set.copy(self)
             data = self.data_[indexes[-test_size:]] if self.data_ is not None else None
             labels = self.labels_[indexes[-test_size:]] if self.labels_ is not None else None
             test_set.initialize(data, labels)
@@ -242,7 +240,7 @@ class TFDataset:
                 current_label = self.data_[first_label_index : first_label_index + label_length]
                 labels.append(current_label)
             dataset = TFDataset(sequences, labels)
-            dataset.deep_copy(self)
+            dataset.copy(self)
             dataset.initialize(data=sequences, labels=labels)
         else:
             sequences = []
@@ -252,7 +250,7 @@ class TFDataset:
                 current_sequence = self.data_[i : last_sequence_index]
                 sequences.append(current_sequence)
             dataset = TFDataset(sequences)
-            dataset.deep_copy(self)
+            dataset.copy(self)
             dataset.initialize(data=sequences, labels=None)
         if self.normalization_mask_ is not None:
             dataset.normalization_mask_ = [False] + self.normalization_mask_
@@ -348,9 +346,9 @@ class TFDataset:
             if attr != 'data_' and attr != 'labels_':
                 string += "%20s: %s\n" % (attr, getattr(self, attr))
         if 'data_' in self.__slots__:
-            string += "%20s: \n%s\n" % ('data_', getattr(self, 'data_'))
+            string += "%s: \n%s\n" % ('data_', getattr(self, 'data_'))
         if 'labels_' in self.__slots__:
-            string += "%20s: \n%s\n" % ('labels_', getattr(self, 'labels_'))
+            string += "%s: \n%s\n" % ('labels_', getattr(self, 'labels_'))
         return string[:-1]
 
 class TFNeuralNetwork(object):

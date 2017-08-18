@@ -78,8 +78,8 @@ class TestTFDataset(unittest.TestCase):
         self.assertEqual(self.empty.batch_count_, 3)
         self.assertTrue(self.empty.init_)
 
-    def test_deep_copy(self):
-        self.empty.deep_copy(self.dataset3)
+    def test_copy(self):
+        self.empty.copy(self.dataset3)
         for attr in self.empty.__slots__:
             self.assertTrue(np.all(np.asarray(getattr(self.empty, attr)) == np.asarray(getattr(self.dataset3, attr))))
 

@@ -9,7 +9,7 @@ import pickle
 from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.python.client import device_lib
 
-def TFHelper:
+class TFHelper:
     @staticmethod
     def devices_list():
         """List of available devices."""
@@ -23,194 +23,17 @@ def TFHelper:
         return checkpoint_state.all_model_checkpoint_paths
 
 class TFBatch:
-    """Single batch container."""
-    def __init__(self, data, **kwargs):
-        self.data = data
-        [setattr(self, key, kwargs[key]) for key in kwargs]
+    __slots__ = []
 
-class TFDataframe:
-    __slots__ = ['init_', 'size_', 'df_',
-    'batch_size_', 'batch_count_', 'batch_num_',
-    'normalized_', 'normalization_mean_', 'normalization_std_']
-
-    init_ = False
-    size_ = None
-
-    df_ = None
-
-    batch_size_ = 1
-    batch_count_ = None
-    batch_num_ = 0
-
-    normalized_ = False
-    normalization_mean_ = None
-    normalization_std_ = None
+    def __init__(self, **kwargs):
+        for key in kwargs:
+            setattr(self, key, kwargs[key])
+            self.__slots__.append(key)
     
-    def __init__(self, df=None, feature_columns=None, label_columns=None):
-        if df is not None:
-            self.set_df(df)
-    
-    def set_batch_size(self, batch_size):
-        """Set batch size."""
-        assert(batch_size > 0)
-        assert(self.init_)
-        assert(batch_size <=  self.size_)
-        self.batch_size_ = batch_size
-        self.batch_count_ = int(self.size_ / self.batch_size_)
-
-    def set_df(self, df):
-        """Set dataframe."""
-        assert(isinstance(df, pd.DataFrame))
-        self.df_ = df
-        self.size_ = len(df)
-        self.batch_count_ = int(self.size_ / self.batch_size_)
-        self.init_ = True
-        
-    def shuffle(self):
-        """Random shuffling dataframe."""
-        assert(self.init_)
-        df = df.sample(frac=1)
-    
-    def next_batch(self):
-        """Get next batch."""
-        assert(self.init_)
-        first = (self.batch_num_ * self.batch_size_) % self.size_
-        last = first + self.batch_size_
-        batch_df = None
-        if (last <= self.size_):
-            batch_df = self.df_.iloc[first:last]
-        else:
-            batch_df = pd.concat([self.df_.iloc[first:], self.df_.iloc[:last - self.size_]])
-        self.batch_num_ += 1
-        return TFBatch(batch_df)
-    
-    def iterbatches(self, count=None):
-        """Get iterator by batches."""
-        assert(self.init_)
-        i = 0
-        while i < count:
-            yield self.next_batch()
-            i += 1
-    
-    def split(self, train_size, val_size, test_size, shuffle=True):
-        """Split dataset to train, validation and test set."""
-        assert(self.init_)
-        assert(train_size >= 0)
-        assert(val_size >= 0)
-        assert(test_size >= 0)
-        total_size = train_size + val_size + test_size
-        assert(total_size == self.size_ or total_size == 1)
-        if total_size == 1:
-            train_size = int(float(train_size) * self.size_)
-            val_size = int(float(val_size) * self.size_)
-            test_size = self.size_ - train_size - val_size
-        if shuffle:
-            self.shuffle()
-        if train_size > 0:
-            train_set = TFDataframe(self.df_[:train_size])
-            train_set.set_batch_size(self.batch_size_)
-        else:
-            train_set = None
-        if val_size > 0:
-            val_set = TFDataframe(self.df_[train_size : train_size + val_size])
-            val_set.set_batch_size(self.batch_size_)
-        else:
-            val_set = None
-        if test_size > 0:
-            test_set = TFDataframe(self.df_[-test_size:])
-            test_set.set_batch_size(self.batch_size_)
-        else:
-            test_set = None
-        return train_set, val_set, test_set
-
-    def deep_copy(self, other):
-        """Copy other dataframe."""
-        for attr in self.__slots__:
-            setattr(self, attr, getattr(other, attr))
-
-    @staticmethod
-    def load(filename):
-        """Load dataframe from file."""
-        with open(filename, 'rb') as f:
-            obj = pickle.load(f)
-        assert(isinstance(obj, TFDataframe))
-        return obj
-
-    def save(self, filename):
-        """Save dataframe to file."""
-        assert(self.init_)
-        with open(filename, 'wb') as f:
-            pickle.dump(self, f)
-            
-    def interpolate(self):
-        """Interpolate NaN values."""
-        self.df_ = self.df_.interpolate()
-
-    def generate_sequences(self, sequence_length, sequence_step, label_length=None, label_offset=None):
-        """
-        Create prediction sequences.
-        Input:
-            sequence_length : int
-            sequence_step : int
-            label_length : int
-            label_offset : int
-        Output:
-            dataset : TFDataset
-        """
-        assert(self.init_)
-        assert(sequence_length > 0)
-        assert(sequence_step > 0)
-        assert(label_length is None or (label_length > 0 and label_offset is not None))
-        if label_length is not None:
-            sequences = []
-            labels = []
-            last = self.size_ - sequence_length - label_length - label_offset
-            for i in xrange(0, last, sequence_step):
-                last_sequence_index = i + sequence_length
-                current_sequence = self.df_.iloc[i : last_sequence_index].values
-                sequences.append(current_sequence)
-                first_label_index = last_sequence_index + label_offset
-                current_label = self.df_.iloc[first_label_index : first_label_index + label_length].values
-                labels.append(current_label)
-            dataset = TFDataset(sequences, labels)
-        else:
-            sequences = []
-            last = self.size_ - sequence_length
-            for i in xrange(0, last, sequence_step):
-                last_sequence_index = i + sequence_length
-                current_sequence = self.df_.iloc[i : last_sequence_index].values
-                sequences.append(current_sequence)
-            dataset = TFDataset(sequences)
-        if self.normalized_:
-            dataset.normalized_ = self.normalized_
-            dataset.normalization_mask_ = [False] + [True] * (self.df_.ndim - 1)
-            dataset.normalization_mean_ = self.normalization_mean_.values
-            dataset.normalization_std_ = self.normalization_std_.values
-        return dataset
-
-    def normalize(self):
-        """Normalize dataframe to zero mean and one std."""
-        if self.normalized_:
-            return
-        self.normalization_mean_ = self.df_.mean()
-        self.normalization_std_ = self.df_.std()
-        self.df_ = (self.df_ - self.normalization_mean_) / self.normalization_std_
-        self.normalized_ = True
-
-    def unnormalize(self):
-        """Unnormalize dataframe to original from zero mean and one std."""
-        if not self.normalized_:
-            return
-        self.df_ =  self.df_ * self.normalization_std_ +  self.normalization_mean_
-        self.normalized_ = False
-
     def __str__(self):
-        string = "TFDataframe object:\n"
+        string = "TFBatch object:\n"
         for attr in self.__slots__:
-            if attr != 'df_':
-                string += "%20s: %s\n" % (attr, getattr(self, attr))
-        if 'df_' in self.__slots__:
-            string += "%20s: \n%s\n" % ('df_', self.df_.head())
+            string += "%20s: %s\n" % (attr, getattr(self, attr))
         return string[:-1]
 
 class TFDataset:
@@ -220,126 +43,147 @@ class TFDataset:
     'batch_size_', 'batch_count_', 'batch_num_',
     'normalized_', 'normalization_mask_', 'normalization_mean_', 'normalization_std_']
 
-    init_ = False
-    size_ = None
-
-    data_ = None
-    data_shape_ = None
-    data_ndim_ = None
-
-    labels_ = None
-    labels_shape_ = None
-    labels_ndim_ = None
-
-    batch_size_ = 1
-    batch_count_ = None
-    batch_num_ = 0
-
-    normalized_ = False
-    normalization_mask_ = None
-    normalization_mean_ = None
-    normalization_std_ = None
+    def check_initialization(function):
+        """Decorator for check initialization."""
+        def wrapper(self, *args, **kwargs):
+            assert self.init_, \
+                'TFDataset should be initialized: self.init_ = %s' % self.init_
+            return function(self, *args, **kwargs)
+        return wrapper
 
     def __init__(self, data=None, labels=None):
-        if data is not None:
-            self.set_data_labels(data, labels)
+        for attr in self.__slots__:
+            setattr(self, attr, None)
+        self.init_ = False
+        self.batch_size_ = 1
+        self.batch_num_ = 0
+        if data is not None or labels is not None:
+            self.initialize(data=data, labels=labels)
 
     def deep_copy(self, other):
         """Copy other dataframe."""
         for attr in self.__slots__:
             setattr(self, attr, getattr(other, attr))
 
-    def set_batch_size(self, batch_size):
-        """Set batch size."""
-        assert(batch_size > 0)
-        assert(self.init_)
-        assert(batch_size <=  self.size_)
-        self.batch_size_ = batch_size
-        self.batch_count_ = int(self.size_ / self.batch_size_)
-
-    def set_data_labels(self, data, labels):
+    def initialize(self, data, labels):
         """Set data and labels."""
-        assert(data is None or labels is None or len(data) == len(labels))
+        if data is not None and labels is not None:
+            assert len(data) == len(labels), \
+                'Data and labels should be the same length: len(data) = %s, len(labels) = %s' % (len(data), len(labels))
         if data is not None:
+            self.size_ = len(data)
             data = np.asarray(data)
             if data.ndim == 1:
                 self.data_ = np.reshape(data, (self.size_, 1))
             else:
                 self.data_ = data
             self.data_shape_ = list(self.data_.shape[1:])
-            self.data_ndim_ = len(self.data_shape_) - 1
-            self.size_ = len(data)
+            self.data_ndim_ = len(self.data_shape_)
         if labels is not None:
+            self.size_ = len(labels)
             labels = np.asarray(labels)
             if labels.ndim == 1:
                 self.labels_ = np.reshape(labels, (self.size_, 1))
             else:
                 self.labels_ = labels
             self.labels_shape_ = list(self.labels_.shape[1:])
-            self.labels_ndim_ = len(self.labels_shape_) - 1
-            self.size_ = len(labels)
+            self.labels_ndim_ = len(self.labels_shape_)
         self.batch_count_ = int(self.size_ / self.batch_size_)
         self.init_ = True
 
+    @check_initialization
     def shuffle(self):
-        """Random shuffling dataset."""
-        assert(self.init_)
+        """Random shuffling of dataset."""
         indexes = np.arange(self.size_)
         np.random.shuffle(indexes)
         self.data_ = self.data_[indexes]
         self.labels_ = self.labels_[indexes]
 
+    @check_initialization
+    def set_batch_size(self, batch_size):
+        """Set batch size."""
+        assert batch_size > 0, \
+            'Batch size should be greater then zero: batch_size = %s' % batch_size
+        assert batch_size <=  self.size_, \
+            'Batch size should not be greater then dataset size: batch_size = %s, self.size_ = %s' % (batch_size, self.size_)
+        self.batch_size_ = int(batch_size)
+        self.batch_count_ = int(self.size_ / self.batch_size_)
+
+    @check_initialization
     def next_batch(self):
         """Get next batch."""
-        assert(self.init_)
         first = (self.batch_num_ * self.batch_size_) % self.size_
         last = first + self.batch_size_
         batch_data = None
         batch_labels = None
         if (last <= self.size_):
-            batch_data = self.data_[first:last]
-            batch_labels = self.labels_[first:last]
+            if self.data_ is not None:
+                batch_data = self.data_[first:last]
+            if self.labels_ is not None:
+                batch_labels = self.labels_[first:last]
         else:
-            batch_data = np.append(self.data_[first:], self.data_[:last - self.size_], axis=0)
-            batch_labels = np.append(self.labels_[first:], self.labels_[:last - self.size_], axis=0)
+            if self.data_ is not None:
+                batch_data = np.append(self.data_[first:], self.data_[:last - self.size_], axis=0)
+            if self.labels_ is not None:
+                batch_labels = np.append(self.labels_[first:], self.labels_[:last - self.size_], axis=0)
         self.batch_num_ += 1
         return TFBatch(data=batch_data, labels=batch_labels)
 
+    @check_initialization
     def iterbatches(self, count=None):
         """Get iterator by batches."""
-        assert(self.init_)
         i = 0
         while i < count:
             yield self.next_batch()
             i += 1
 
+    @check_initialization
     def split(self, train_size, val_size, test_size, shuffle):
         """Split dataset to train, validation and test set."""
-        assert(self.init_)
-        assert(train_size >= 0)
-        assert(val_size >= 0)
-        assert(test_size >= 0)
+        assert train_size >= 0, \
+            'Training size should not be less then zero: train_size = %s' % train_size
+        assert val_size >= 0, \
+            'Validation size should not be less then zero: val_size = %s' % val_size
+        assert test_size >= 0, \
+            'Testing size should not be less then zero: test_size = %s' % test_size
         total_size = train_size + val_size + test_size
-        assert(total_size == self.size_ or total_size == 1)
+        assert total_size == self.size_ or total_size == 1, \
+            'Total size should be equal to TFDataset size or one: total_size = %s, self.size_ = %s' % (total_size, self.size_)
         if total_size == 1:
-            train_size = int(float(train_size) * self.size_)
-            test_size = int(float(test_size) * self.size_)
-            val_size = self.size_ - train_size - test_size
+            if train_size != 0:
+                train_size = int(float(train_size) * self.size_)
+            if test_size != 0:
+                if val_size != 0:
+                    test_size = int(float(test_size) * self.size_)
+                else:
+                    test_size = self.size_ - train_size
+            if val_size != 0:
+                val_size = self.size_ - train_size - test_size
+        indexes = np.arange(self.size_)
         if shuffle:
-            self.shuffle()
+            np.random.shuffle(indexes)
         if train_size > 0:
-            train_set = TFDataset(self.data_[:train_size], self.labels_[:train_size])
-            train_set.set_batch_size(self.batch_size_)
+            train_set = TFDataset()
+            train_set.deep_copy(self)
+            data = self.data_[indexes[:train_size]] if self.data_ is not None else None
+            labels = self.labels_[indexes[:train_size]] if self.labels_ is not None else None
+            train_set.initialize(data, labels)
         else:
             train_set = None
         if val_size > 0:
-            val_set = TFDataset(self.data_[train_size:train_size + val_size], self.labels_[train_size:train_size + val_size])
-            val_set.set_batch_size(self.batch_size_)
+            val_set = TFDataset()
+            val_set.deep_copy(self)
+            data = self.data_[indexes[train_size:train_size + val_size]] if self.data_ is not None else None
+            labels = self.labels_[indexes[train_size:train_size + val_size]] if self.labels_ is not None else None
+            val_set.initialize(data, labels)
         else:
             val_set = None
         if test_size > 0:
-            test_set = TFDataset(self.data_[-test_size:], self.labels_[-test_size:])
-            test_set.set_batch_size(self.batch_size_)
+            test_set = TFDataset()
+            test_set.deep_copy(self)
+            data = self.data_[indexes[-test_size:]] if self.data_ is not None else None
+            labels = self.labels_[indexes[-test_size:]] if self.labels_ is not None else None
+            test_set.initialize(data, labels)
         else:
             test_set = None
         return train_set, val_set, test_set
@@ -349,30 +193,26 @@ class TFDataset:
         """Load dataset from file."""
         with open(filename, 'rb') as f:
             obj = pickle.load(f)
-        isinstance(obj, TFDataset)
+        assert isinstance(obj, TFDataset), \
+            'Loaded object should be TFDataset object: type(obj) = %s' % type(obj)
         return obj
 
+    @check_initialization
     def save(self, filename):
         """Save dataset to file."""
-        assert(self.init_)
         with open(filename, 'wb') as f:
             pickle.dump(self, f)
 
+    @check_initialization
     def generate_sequences(self, sequence_length, sequence_step, label_length=None, label_offset=None):
-        """
-        Create prediction sequences.
-        Input:
-            sequence_length : int
-            sequence_step : int
-            label_length : int
-            label_offset : int
-        Output:
-            dataset : TFDataset
-        """
-        assert(self.init_)
-        assert(sequence_length > 0)
-        assert(sequence_step > 0)
-        assert(label_length is None or (label_length > 0 and label_offset is not None))
+        """Generate sequences."""
+        assert sequence_length > 0, \
+            'Sequence length should be greater than zero: sequence_length = %s' % sequence_length
+        assert sequence_step > 0, \
+            'Sequence step should be greater than zero: sequence_step = %s' % sequence_step
+        if label_length is not None:
+            assert label_length > 0 and label_offset is not None, \
+                'Label length should be greater than zero and label offset passed: label_length = %s, label_offset = %s' % label_offset
         if label_length is not None:
             sequences = []
             labels = []
@@ -385,6 +225,8 @@ class TFDataset:
                 current_label = self.data_[first_label_index : first_label_index + label_length]
                 labels.append(current_label)
             dataset = TFDataset(sequences, labels)
+            dataset.deep_copy(self)
+            dataset.initialize(data=sequences, labels=labels)
         else:
             sequences = []
             last = self.size_ - sequence_length
@@ -393,13 +235,13 @@ class TFDataset:
                 current_sequence = self.data_[i : last_sequence_index]
                 sequences.append(current_sequence)
             dataset = TFDataset(sequences)
-        dataset.normalized_ = self.normalized_
+            dataset.deep_copy(self)
+            dataset.initialize(data=sequences)
         dataset.normalization_mask_ = [False] + self.normalization_mask_
-        dataset.normalization_mean_ = self.normalization_mean_
-        dataset.normalization_std_ = self.normalization_std_
         return dataset
 
-    def normalize_data(self, mask=None):
+    @check_initialization
+    def normalize(self, mask=None):
         """
         Normalize data to zero mean and one std by mask.
         Where mask is boolean indicators corresponding to data dimensions.
@@ -408,7 +250,8 @@ class TFDataset:
         if self.normalized_:
             return
         if mask is not None:
-            assert(len(mask) == self.data_.ndim)
+            assert len(mask) == self.data_.ndim, \
+                'Mask length should be equal to data dimensions count: len(mask) = %s, self.data_.ndim = %s' % (len(mask), self.data_.ndim)
 
             # Reshape to array of features
             data_shape_arr = np.asarray(self.data_.shape)
@@ -442,7 +285,8 @@ class TFDataset:
             self.data_ = (self.data_ - self.normalization_mean_) / self.normalization_std_
         self.normalized_ = True
 
-    def unnormalize_data(self):
+    @check_initialization
+    def unnormalize(self):
         """Unnormalize dataset to original from zero mean and one std."""
         if not self.normalized_:
             return
@@ -476,32 +320,6 @@ class TFDataset:
         if 'labels_' in self.__slots__:
             string += "%20s: \n%s\n" % ('labels_', getattr(self, 'labels_'))
         return string[:-1]
-
-class TFTripletset(TFDataset):
-    def __init__(self, dataframe, batch_min_positives):
-        self.n_positives = batch_min_positives
-        self.n_negatives = self.batch_size - self.n_positives
-
-        # store user session counts to pickup positives examples
-        self.positive_series = filter(lambda x: x[1] >= self.n_positives, self.df.iloc[:,-1].value_counts().iteritems())
-
-    def next_batch(self):
-        """Get next batch."""
-        # Pick random user for positives.
-        positive_key, positive_count = self.positive_series[np.random.randint(0, len(self.positive_series))]
-
-        # Take positive samples.
-        positives = self.data_[self.label_ == positive_key]
-        positives = positives[np.random.choice(np.arange(positive_count), self.n_positives, replace=False)]
-
-        # Take negative samples.
-        negatives = self.data_[self.label_ != positive_key]
-        negatives = negatives.iloc[np.random.choice(np.arange(negatives.shape[0]), self.n_negatives, replace=False)]
-
-        df_batch = self.df.loc[positives.index | negatives.index]
-        
-        return TFBatch(df_batch.iloc[:,:-1].values,
-                    df_batch.iloc[:,-1].map(lambda x: 0 if x == positive_key else 1).values.astype(int32))
 
 class TFNeuralNetwork(object):
     __slots__ = ['inputs_shape_', 'outputs_shape_', 'data_placeholder_', 'labels_placeholder_', 'outputs_', 'metrics_', 'loss_',

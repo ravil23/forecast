@@ -55,6 +55,7 @@ class TFDataset:
         for attr in self.__slots__:
             setattr(self, attr, None)
         self.init_ = False
+        self.size_ = 0
         self.batch_size_ = 1
         self.batch_num_ = 0
         if data is not None or labels is not None:
@@ -67,6 +68,8 @@ class TFDataset:
 
     def initialize(self, data, labels):
         """Set data and labels."""
+        assert data is not None or labels is not None, \
+            'Data or labels should be passed: data = %s, labels = %s' % (data, labels)
         if data is not None and labels is not None:
             assert len(data) == len(labels), \
                 'Data and labels should be the same length: len(data) = %s, len(labels) = %s' % (len(data), len(labels))
@@ -79,6 +82,14 @@ class TFDataset:
                 self.data_ = data
             self.data_shape_ = list(self.data_.shape[1:])
             self.data_ndim_ = len(self.data_shape_)
+        else:
+            self.data_ = None
+            self.data_shape_ = None
+            self.data_ndim_ = None
+            self.normalized_ = None
+            self.normalization_mask_ = None
+            self.normalization_mean_ = None
+            self.normalization_std_ = None
         if labels is not None:
             self.size_ = len(labels)
             labels = np.asarray(labels)
@@ -88,6 +99,10 @@ class TFDataset:
                 self.labels_ = labels
             self.labels_shape_ = list(self.labels_.shape[1:])
             self.labels_ndim_ = len(self.labels_shape_)
+        else:
+            self.labels_ = None
+            self.labels_shape_ = None
+            self.labels_ndim_ = None
         self.batch_count_ = int(self.size_ / self.batch_size_)
         self.init_ = True
 
@@ -132,10 +147,10 @@ class TFDataset:
     @check_initialization
     def iterbatches(self, count=None):
         """Get iterator by batches."""
-        i = 0
-        while i < count:
+        if count is None:
+            count = self.batch_count_
+        for i in xrange(count):
             yield self.next_batch()
-            i += 1
 
     @check_initialization
     def split(self, train_size, val_size, test_size, shuffle):
@@ -151,10 +166,10 @@ class TFDataset:
             'Total size should be equal to TFDataset size or one: total_size = %s, self.size_ = %s' % (total_size, self.size_)
         if total_size == 1:
             if train_size != 0:
-                train_size = int(float(train_size) * self.size_)
+                train_size = int(round(float(train_size) * self.size_))
             if test_size != 0:
                 if val_size != 0:
-                    test_size = int(float(test_size) * self.size_)
+                    test_size = int(round(float(test_size) * self.size_))
                 else:
                     test_size = self.size_ - train_size
             if val_size != 0:
@@ -206,17 +221,19 @@ class TFDataset:
     @check_initialization
     def generate_sequences(self, sequence_length, sequence_step, label_length=None, label_offset=None):
         """Generate sequences."""
+        assert self.data_ is not None, \
+            'Data field should be initialized: self.data_ = %s' % self.data_
         assert sequence_length > 0, \
             'Sequence length should be greater than zero: sequence_length = %s' % sequence_length
         assert sequence_step > 0, \
             'Sequence step should be greater than zero: sequence_step = %s' % sequence_step
         if label_length is not None:
             assert label_length > 0 and label_offset is not None, \
-                'Label length should be greater than zero and label offset passed: label_length = %s, label_offset = %s' % label_offset
+                'Label length should be greater than zero and label offset passed: label_length = %s, label_offset = %s' % (label_length, label_offset)
         if label_length is not None:
             sequences = []
             labels = []
-            last = self.size_ - sequence_length - label_length - label_offset
+            last = self.size_ - sequence_length - label_length - label_offset + 1
             for i in xrange(0, last, sequence_step):
                 last_sequence_index = i + sequence_length
                 current_sequence = self.data_[i : last_sequence_index]
@@ -229,15 +246,16 @@ class TFDataset:
             dataset.initialize(data=sequences, labels=labels)
         else:
             sequences = []
-            last = self.size_ - sequence_length
+            last = self.size_ - sequence_length + 1
             for i in xrange(0, last, sequence_step):
                 last_sequence_index = i + sequence_length
                 current_sequence = self.data_[i : last_sequence_index]
                 sequences.append(current_sequence)
             dataset = TFDataset(sequences)
             dataset.deep_copy(self)
-            dataset.initialize(data=sequences)
-        dataset.normalization_mask_ = [False] + self.normalization_mask_
+            dataset.initialize(data=sequences, labels=None)
+        if self.normalization_mask_ is not None:
+            dataset.normalization_mask_ = [False] + self.normalization_mask_
         return dataset
 
     @check_initialization
@@ -247,14 +265,23 @@ class TFDataset:
         Where mask is boolean indicators corresponding to data dimensions.
         If mask value is True, then feature with this dimension should be normalized.
         """
+        assert self.data_ is not None, \
+            'Data field should be initialized: self.data_ = %s' % self.data_
         if self.normalized_:
             return
         if mask is not None:
-            assert len(mask) == self.data_.ndim, \
-                'Mask length should be equal to data dimensions count: len(mask) = %s, self.data_.ndim = %s' % (len(mask), self.data_.ndim)
+            assert len(mask) == self.data_ndim_, \
+                'Mask length should be equal to data dimensions count: len(mask) = %s, self.data_ndim_ = %s' % (len(mask), self.data_ndim_)
+
+            for i in xrange(0, len(mask) - 1):
+                assert mask[i + 1] or not mask[i], \
+                    'False elements should be before True elements: mask = %s' % mask
+
+            assert mask[-1] == True, \
+                'Last mask element should be True: mask = %s' % mask
 
             # Reshape to array of features
-            data_shape_arr = np.asarray(self.data_.shape)
+            data_shape_arr = np.asarray(self.data_shape_)
             new_shape = [-1] + list(data_shape_arr[mask])
             reshaped_data = np.reshape(self.data_, new_shape)
 
@@ -263,7 +290,7 @@ class TFDataset:
             self.normalization_mean_ = np.mean(reshaped_data, axis=0)
             self.normalization_std_ = np.std(reshaped_data, axis=0)
 
-            # Reshape for correct broadcasting
+            # Reshape normalization properties for correct broadcasting
             valid_shape = data_shape_arr
             valid_shape[np.logical_not(self.normalization_mask_)] = 1
             reshaped_normalization_mean_ = np.reshape(self.normalization_mean_, valid_shape)
@@ -277,7 +304,7 @@ class TFDataset:
             self.data_ = (self.data_ - reshaped_normalization_mean_) / valid_normalization_std_
         else:
             # Save normalisation properties
-            self.normalization_mask_ = list(mask)
+            self.normalization_mask_ = None
             self.normalization_mean_ = np.mean(self.data_)
             self.normalization_std_ = np.std(self.data_)
 
@@ -288,10 +315,12 @@ class TFDataset:
     @check_initialization
     def unnormalize(self):
         """Unnormalize dataset to original from zero mean and one std."""
+        assert self.data_ is not None, \
+            'Data field should be initialized: self.data_ = %s' % self.data_
         if not self.normalized_:
             return
         if self.normalization_mask_ is not None:
-            data_shape_arr = np.asarray(self.data_.shape)
+            data_shape_arr = np.asarray(self.data_shape_)
 
             # Reshape for correct broadcasting
             valid_shape = data_shape_arr
@@ -309,6 +338,9 @@ class TFDataset:
             # Update dataset with unnormalized value
             self.data_ =  self.data_ * self.normalization_std_ +  self.normalization_mean_
         self.normalized_ = False
+
+    def __len__(self):
+        return self.size_
 
     def __str__(self):
         string = "TFDataset object:\n"

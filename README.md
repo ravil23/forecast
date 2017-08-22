@@ -2,7 +2,7 @@
 Online weather prediction with TensorFlow
 
 ## Dependency
-* Python 2.7
+* [Python 3.6.2+](https://www.python.org/downloads/release/python-362)
 * [PyOWM](https://github.com/csparpa/pyowm)
 * [NumPy](https://github.com/numpy/numpy)
 * [Matplotlib](https://github.com/matplotlib/matplotlib)

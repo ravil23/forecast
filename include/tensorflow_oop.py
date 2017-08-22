@@ -9,7 +9,15 @@ import pickle
 from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.python.client import device_lib
 
+# Set logging level.
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 class TFHelper:
+
+    """
+    Helpful functions.
+    """
+
     @staticmethod
     def devices_list():
         """List of available devices."""
@@ -24,30 +32,47 @@ class TFHelper:
 
 class TFBatch:
 
+    """
+    Batch container.
+    """
+
     def __init__(self, **kwargs):
         for key in kwargs:
             setattr(self, key, kwargs[key])
-    
+
     def __str__(self):
         string = "TFBatch object:\n"
         for attr in self.__dict__:
             string += "%s: \n%s\n" % (attr, getattr(self, attr))
         return string[:-1]
 
-class TFDataset:
-    __slots__ = ['init_', 'size_',
-    'data_', 'data_shape_', 'data_ndim_',
-    'labels_', 'labels_shape_', 'labels_ndim_',
-    'batch_size_', 'batch_count_', 'batch_num_',
-    'normalized_', 'normalization_mask_', 'normalization_mean_', 'normalization_std_']
+def check_initialization(function):
+    """Decorator for check initialization."""
+    def wrapper(self, *args, **kwargs):
+        assert self.init_, \
+            'Object should be initialized: self.init_ = %s' % self.init_
+        return function(self, *args, **kwargs)
+    return wrapper
 
-    def check_initialization(function):
-        """Decorator for check initialization."""
-        def wrapper(self, *args, **kwargs):
-            assert self.init_, \
-                'TFDataset should be initialized: self.init_ = %s' % self.init_
-            return function(self, *args, **kwargs)
-        return wrapper
+def check_inputs_values(function):
+    """Decorator for check corresponding inputs values."""
+    def wrapper(self, inputs_values, *args, **kwargs):
+        assert np.all(np.asarray(inputs_values.shape[1:]) == np.asarray(self.inputs_shape_)), \
+            'Inputs values shape should be correspond to model inputs shape: inputs_values.shape = %s, self.inputs_shape_ = %s' % (inputs_values.shape, self.inputs_shape_) 
+        return function(self, inputs_values=inputs_values, *args, **kwargs)
+    return wrapper        
+
+class TFDataset:
+
+    """
+    Dataset structure.
+    """
+
+    __slots__ = ['init_', 'size_',
+                 'data_', 'data_shape_', 'data_ndim_',
+                 'labels_', 'labels_shape_', 'labels_ndim_',
+                 'batch_size_', 'batch_count_', 'batch_num_',
+                 'normalized_', 'normalization_mask_', 'normalization_mean_', 'normalization_std_']
 
     def __init__(self, data=None, labels=None):
         for attr in self.__slots__:
@@ -140,14 +165,14 @@ class TFDataset:
             if self.labels_ is not None:
                 batch_labels = np.append(self.labels_[first:], self.labels_[:last - self.size_], axis=0)
         self.batch_num_ += 1
-        return TFBatch(data=batch_data, labels=batch_labels)
+        return TFBatch(data_=batch_data, labels_=batch_labels)
 
     @check_initialization
     def iterbatches(self, count=None):
         """Get iterator by batches."""
         if count is None:
             count = self.batch_count_
-        for i in xrange(count):
+        for i in range(count):
             yield self.next_batch()
 
     @check_initialization
@@ -232,7 +257,7 @@ class TFDataset:
             sequences = []
             labels = []
             last = self.size_ - sequence_length - label_length - label_offset + 1
-            for i in xrange(0, last, sequence_step):
+            for i in range(0, last, sequence_step):
                 last_sequence_index = i + sequence_length
                 current_sequence = self.data_[i : last_sequence_index]
                 sequences.append(current_sequence)
@@ -245,7 +270,7 @@ class TFDataset:
         else:
             sequences = []
             last = self.size_ - sequence_length + 1
-            for i in xrange(0, last, sequence_step):
+            for i in range(0, last, sequence_step):
                 last_sequence_index = i + sequence_length
                 current_sequence = self.data_[i : last_sequence_index]
                 sequences.append(current_sequence)
@@ -271,7 +296,7 @@ class TFDataset:
             assert len(mask) == self.data_ndim_, \
                 'Mask length should be equal to data dimensions count: len(mask) = %s, self.data_ndim_ = %s' % (len(mask), self.data_ndim_)
 
-            for i in xrange(0, len(mask) - 1):
+            for i in range(0, len(mask) - 1):
                 assert mask[i + 1] or not mask[i], \
                     'False elements should be before True elements: mask = %s' % mask
 
@@ -341,7 +366,7 @@ class TFDataset:
         return self.size_
 
     def __str__(self):
-        string = "TFDataset object:\n"
+        string = 'TFDataset object:\n'
         for attr in self.__slots__:
             if attr != 'data_' and attr != 'labels_':
                 string += "%20s: %s\n" % (attr, getattr(self, attr))
@@ -351,11 +376,64 @@ class TFDataset:
             string += "%s: \n%s\n" % ('labels_', getattr(self, 'labels_'))
         return string[:-1]
 
-class TFNeuralNetwork(object):
-    __slots__ = ['inputs_shape_', 'outputs_shape_', 'data_placeholder_', 'labels_placeholder_', 'outputs_', 'metrics_', 'loss_',
-                 'log_dir_', 'sess_', 'kwargs_', 'summary_', 'summary_writer_']
+class TFTripletset(TFDataset):
 
-    def __init__(self, log_dir, inputs_shape, outputs_shape, device=None, metric_functions={}, **kwargs):
+    """
+    Triplet generation dataset.
+    """
+
+    __slots__ = TFDataset.__slots__ + ['batch_positives_count_', 'batch_negatives_count_', 'labels_counts_']
+
+    def initialize(self, data, labels):
+        assert data is not None and labels is not None, \
+            'Data and labels should be passed: data = %s, labels = %s' % (data, labels)
+        ndim = np.asarray(labels).ndim
+        assert ndim == 1, \
+            'Labels should be 1D dimension: labels.ndim = %s' % ndim
+        super().initialize(data, labels)
+
+    @check_initialization
+    def set_batch_size(self, batch_size, batch_positives_count):
+        assert batch_positives_count > 0, \
+            'Positives count in batch should be greater than zero: batch_positives_count = %s' % batch_positives_count
+        assert batch_positives_count < batch_size, \
+            'Positives count in batch should be less than batch size: batch_positives_count = %s, batch_size = %s' % (batch_positives_count, batch_size)
+        super().set_batch_size(batch_size)
+        self.batch_positives_count_ = int(batch_positives_count)
+        self.batch_negatives_count_ = self.batch_size_ - self.batch_positives_count_
+
+    @check_initialization
+    def next_batch(self):
+        labels = self.labels_.flatten()
+        labels_counts = np.bincount(labels)
+        positive_keys = np.where(labels_counts >= self.batch_positives_count_)[0]
+        positive_key = positive_keys[np.random.randint(0, len(positive_keys))]
+
+        # Take positive samples
+        positives = self.data_[labels == positive_key]
+        positives = positives[np.random.choice(np.arange(labels_counts[positive_key]), self.batch_positives_count_, replace=False), :]
+
+        # Take negative samples
+        negatives = self.data_[labels != positive_key]
+        negatives = negatives[np.random.choice(np.arange(negatives.shape[0]), self.batch_negatives_count_, replace=False), :]
+
+        batch_data = np.vstack([positives, negatives])
+        batch_labels = np.append(np.zeros(len(positives)), np.ones(len(negatives)))
+        return TFBatch(data_=batch_data, labels_=batch_labels)
+
+class TFNeuralNetwork:
+
+    """
+    Basic neural network model.
+    """
+
+    __slots__ = ['log_dir_', 'inputs_shape_', 'outputs_shape_',
+                 'data_placeholder_', 'labels_placeholder_',
+                 'outputs_', 'metrics_', 'loss_',
+                 'sess_', 'kwargs_',
+                 'summary_', 'summary_writer_', 'projector_config_']
+
+    def __init__(self, log_dir, inputs_shape, outputs_shape, inputs_type=tf.float32, outputs_type=tf.float32, reset_default_graph=True, metric_functions={}, **kwargs):
         print('Start initializing model...')
 
         # TensorBoard logging directory.
@@ -368,21 +446,23 @@ class TFNeuralNetwork(object):
         self.kwargs_ = kwargs
 
         # Reset default graph.
-        tf.reset_default_graph()
+        if reset_default_graph:
+            tf.reset_default_graph()
 
         # Input and Output layer shapes.
         self.inputs_shape_ = list(inputs_shape)
         self.outputs_shape_ = list(outputs_shape)
 
         # Generate placeholders for the data and labels.
-        self.data_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.inputs_shape_, name="input_data")
-        self.labels_placeholder_ = tf.placeholder(tf.float32, shape=[None] + self.outputs_shape_, name="input_labels")
+        self.data_placeholder_ = tf.placeholder(inputs_type, shape=[None] + self.inputs_shape_, name='input_data')
+        if self.labels_placeholder_ is None:
+            self.labels_placeholder_ = tf.placeholder(outputs_type, shape=[None] + self.outputs_shape_, name='input_labels')
 
         # Build a Graph that computes predictions from the inference model.
-        self.outputs_ = tf.identity(self.inference(self.data_placeholder_, **self.kwargs_), name="output")
+        self.outputs_ = tf.identity(self.inference(self.data_placeholder_, **self.kwargs_), name='output_layer')
 
         # Loss function.
-        self.loss_ = self.loss_function(self.outputs_, self.labels_placeholder_)
+        self.loss_ = tf.identity(self.loss_function(self.outputs_, self.labels_placeholder_, **self.kwargs_), name='loss')
 
         # Evaluation options.
         self.metrics_ = {key : metric_functions[key](self.outputs_, self.labels_placeholder_) for key in metric_functions}
@@ -398,6 +478,9 @@ class TFNeuralNetwork(object):
 
         # Instantiate a SummaryWriter to output summaries and the Graph.
         self.summary_writer_ = tf.summary.FileWriter(self.log_dir_, self.sess_.graph)
+
+        # Projector config object.
+        self.projector_config_ = projector.ProjectorConfig()
 
         # And then after everything is built:
 
@@ -416,87 +499,138 @@ class TFNeuralNetwork(object):
         raise Exception('Loss function should be overwritten!')
         return loss
 
-    def fit(self, train_set, epoch_count,
-        optimizer=tf.train.RMSPropOptimizer,
-        learning_rate=0.001,
-        iter_count=np.inf,
-        val_set=None,
-        checkpoint_period=1000,
-        summarizing_period=1):
+    def fit(self, train_set, iteration_count,
+            optimizer=tf.train.RMSPropOptimizer,
+            learning_rate=0.001,
+            epoch_count=None,
+            val_set=None,
+            summarizing_period=1,
+            logging_period=100,
+            checkpoint_period=10000,
+            evaluation_period=10000):
         """Train model."""
 
-        assert(epoch_count > 0)
-        assert(isinstance(train_set, TFDataset))
+        if epoch_count is not None:
+            assert epoch_count > 0, \
+                'Epoch count should be greater than zero: epoch_count = %s' % epoch_count
+            epoch_count = int(epoch_count)
+        else:
+            assert iteration_count is not None, \
+                'Iteration count should be passed if epoch count is None: iteration_count = %s, epoch_count = %s' % (iteration_count, epoch_count)
+        if iteration_count is not None:
+            assert iteration_count > 0, \
+                'Iteration count should be greater than zero: iteration_count = %s' % iteration_count
+            iteration_count = int(iteration_count)
+        if summarizing_period is not None:
+            assert summarizing_period > 0, \
+                'Summarizing period should be greater than zero: summarizing_period = %s' % summarizing_period
+            summarizing_period = int(summarizing_period)
+        if logging_period is not None:
+            assert logging_period > 0, \
+                'Logging period should be greater than zero: logging_period = %s' % logging_period
+            logging_period = int(logging_period)
+        if checkpoint_period is not None:
+            assert checkpoint_period > 0, \
+                'Checkpoint period should be greater than zero: checkpoint_period = %s' % checkpoint_period
+            checkpoint_period = int(checkpoint_period)
+        if evaluation_period is not None:
+            assert evaluation_period > 0, \
+                'Evaluation period should be greater than zero: evaluation_period = %s' % evaluation_period
+            evaluation_period = int(evaluation_period)
+        assert isinstance(train_set, TFDataset), \
+            'Training set should be object of TFDataset type: type(train_set) = %s' % type(train_set)
+        assert train_set.init_, \
+            'Training set should be initialized: train_set.init_ = %s' % train_set.init_
         if val_set is not None:
-            assert(isinstance(val_set, TFDataset))
-            assert(val_set.init_)
-            assert(train_set.data_ndim_ == val_set.data_ndim_)
-            assert(train_set.labels_ndim_ == val_set.labels_ndim_)
-            assert(np.all(np.array(train_set.labels_shape_[1:]) == np.array(val_set.labels_shape_[1:])))
-            assert(np.all(np.array(train_set.data_shape_[1:]) == np.array(val_set.data_shape_[1:])))
+            assert(isinstance(val_set, TFDataset)), \
+                'Validation set should be object of TFDataset type: type(val_set) = %s' % type(val_set)
+            assert val_set.init_, \
+                'Validation set should be initialized: val_set.init_ = %s' % val_set.init_
 
         print('Start training iteration...')
         start_fit_time = time.time()
 
         # Checkpoint configuration.
-        checkpoint_name = "fit-checkpoint"
+        checkpoint_name = 'fit-checkpoint'
         checkpoint_file = os.path.join(self.log_dir_, checkpoint_name)
 
         # Add to the Graph the Ops that calculate and apply gradients.
         train_op = optimizer(learning_rate).minimize(self.loss_)
 
         # Run the Op to initialize the variables.
-        self.sess_.run(tf.variables_initializer([train_op]))
+        self.sess_.run(tf.global_variables_initializer())
 
-        # Global iteration step.
+        # Get actual iteration and epoch count
+        if epoch_count is not None:
+            if iteration_count is not None:
+                iteration_count = min(iteration_count, train_set.batch_count_ * epoch_count)
+            else:
+                iteration_count = train_set.batch_count_ * epoch_count
+        else:
+            epoch_count = iteration_count // train_set.batch_count_
+
+        # Global iteration step and epoch number.
         iteration = 0
+        epoch = 0
 
         # Start the training loop.
-        for epoch in xrange(epoch_count):
-            start_epoch_time = time.time()
+        iteration_times = []
+        start_iteration_time = time.time()
+        last_logging_iter = 0
 
-            # Loop over all batches
-            for batch in train_set.iterbatches(train_set.batch_count_):
-                # Fill feed dict.
-                feed_dict = {
-                    self.data_placeholder_: batch.data,
-                    self.labels_placeholder_: batch.labels,
-                }
+        # Loop over all batches
+        for batch in train_set.iterbatches(iteration_count):
+            # Fill feed dict.
+            feed_dict = {
+                self.data_placeholder_: batch.data_,
+                self.labels_placeholder_: batch.labels_,
+            }
 
-                # Run one step of the model training.
-                self.sess_.run(train_op, feed_dict=feed_dict)
+            # Run one step of the model training.
+            self.sess_.run(train_op, feed_dict=feed_dict)
 
+            # Save iteration time.
+            iteration_times.append(time.time() - start_iteration_time)
+
+            # Get current trained iteration and epoch.
+            iteration += 1
+            epoch = iteration // train_set.batch_count_
+
+            # Write the summaries periodically.
+            if iteration % summarizing_period == 0 or iteration == iteration_count:
                 # Update the events file.
                 summary_str = self.sess_.run(self.summary_, feed_dict=feed_dict)
-                self.summary_writer_.add_summary(summary_str, epoch)
+                self.summary_writer_.add_summary(summary_str, iteration)
 
-                iteration += 1
-                if iteration >= iter_count:
-                    break
+            # Print an overview periodically.
+            if iteration % logging_period == 0 or iteration == iteration_count:
+                # Calculate time of last period.
+                duration = np.sum(iteration_times[-logging_period:])
 
-            duration = time.time() - start_epoch_time
-
-            # Write the summaries and print an overview fairly often.
-            next_epoch = epoch + 1
-            if next_epoch % summarizing_period == 0:
-                if val_set is not None:
-                    metrics = self.evaluate(val_set)
-                else:
-                    metrics = self.evaluate(train_set)
+                # Print logging info.
+                metrics = self.evaluate(batch)
                 metrics_string = '   '.join([str(key) + ' = %.6f' % metrics[key] for key in metrics])
+                print('Iteration %d / %d (epoch %d / %d):   %s   [%.3f sec]' % (iteration, iteration_count, epoch, epoch_count, metrics_string, duration))
+
+            # Save a checkpoint the model periodically.
+            if checkpoint_period is not None and iteration % checkpoint_period == 0 or iteration == iteration_count:
+                self.save(checkpoint_file, global_step=iteration)
+
+            # Evaluate the model periodically.
+            if evaluation_period is not None and iteration % evaluation_period == 0 or iteration == iteration_count:
+                start_evaluation_time = time.time()
+                metrics = self.evaluate(train_set)
+                metrics_string = '   '.join([str(key) + ' = %.6f' % metrics[key] for key in metrics])
+                duration = time.time() - start_evaluation_time
+                print('Evaluation on full dataset:   [training   set]   %s   [%.3f sec]' % (metrics_string, duration))
                 if val_set is not None:
-                    metrics_string = '[validation set]   ' + metrics_string
-                else:
-                    metrics_string = '[training set]   ' + metrics_string
-                print('Epoch %d/%d:   %s   (%.3f sec)' % (next_epoch, epoch_count, metrics_string, duration))
+                    start_evaluation_time = time.time()
+                    metrics = self.evaluate(val_set)
+                    metrics_string = '   '.join([str(key) + ' = %.6f' % metrics[key] for key in metrics])
+                    duration = time.time() - start_evaluation_time
+                    print('Evaluation on full dataset:   [validation set]   %s   [%.3f sec]' % (metrics_string, duration))
 
-            # Save a checkpoint and evaluate the model periodically.
-            if next_epoch % checkpoint_period == 0 or next_epoch == epoch_count:
-                self.save(checkpoint_file, global_step=next_epoch)
-
-            if iteration >= iter_count:
-                print('Stop by maximum iteration count: %s' % iteration)
-                break
+            start_iteration_time = time.time()
 
         self.summary_writer_.flush()
         total_time = time.time() - start_fit_time
@@ -504,91 +638,103 @@ class TFNeuralNetwork(object):
 
     def evaluate(self, dataset):
         """Evaluate model."""
-        assert(isinstance(dataset, TFDataset))
-        assert(dataset.init_)
+        assert isinstance(dataset, TFDataset) or isinstance(dataset, TFBatch), \
+            'Argument should be object of TFDataset or TFBatch type: type(dataset) = %s' % type(dataset)
+        if isinstance(dataset, TFDataset):
+            assert dataset.init_, \
+                'Dataset should be initialized: dataset.init_ = %s' % dataset.init_
+        if isinstance(dataset, TFBatch):
+            assert hasattr(dataset, 'data_') and hasattr(dataset, 'labels_'), \
+                'Batch should contain attributes \'data_\' and \'labels_\'.'
         result = {}
         if len(self.metrics_) > 0:
-            metric_keys = self.metrics_.keys()
-            metric_values = self.metrics_.values()
+            metric_keys = list(self.metrics_.keys())
+            metric_values = list(self.metrics_.values())
             estimates = self.sess_.run(metric_values, feed_dict={
                 self.data_placeholder_: dataset.data_,
                 self.labels_placeholder_: dataset.labels_,
             })
-            for i in xrange(len(self.metrics_)):
+            for i in range(len(self.metrics_)):
                 result[metric_keys[i]] = estimates[i]
         return result
 
     def save(self, filename, global_step=None):
         """Save checkpoint."""
         saver = tf.train.Saver(max_to_keep=None)
-        saver.save(self.sess_, filename, global_step=global_step)
-        print('Model saved to: %s' % filename)
+        saved_filename = saver.save(self.sess_, filename, global_step=global_step)
+        print('Model saved to: %s' % saved_filename)
 
     def load(self, model_checkpoint_path=None):
         """Load checkpoint."""
         if model_checkpoint_path is None:
             model_checkpoint_path = tf.train.latest_checkpoint(self.log_dir_)
-        assert(model_checkpoint_path is not None)
+            assert model_checkpoint_path is not None, \
+                'Checkpoint path automatically not found.'
         saver = tf.train.import_meta_graph(model_checkpoint_path + '.meta', clear_devices=True)
         saver.restore(self.sess_, model_checkpoint_path)
         print('Model loaded from: %s' % model_checkpoint_path)
-    
+
+    @check_inputs_values
     def forward(self, inputs_values):
         """Forward propagation."""
-        assert(np.all(np.asarray(inputs_values.shape[1:]) == np.asarray(self.inputs_shape_)))
         return self.sess_.run(self.outputs_, feed_dict={
             self.data_placeholder_: inputs_values,
         })
 
+    @check_inputs_values
     def top_k(self, inputs_values, k):
         """Top k element."""
-        assert(np.all(np.asarray(inputs_values.shape[1:]) == np.asarray(self.inputs_shape_)))
         return self.sess_.run(tf.nn.top_k(self.data_placeholder_, k=k), feed_dict={
             self.data_placeholder_: inputs_values,
         })
 
     def __str__(self):
-        string = "TFNeuralNetwork object:\n"
+        string = 'TFNeuralNetwork object:\n'
         for attr in self.__slots__:
             string += "%20s: %s\n" % (attr, getattr(self, attr))
         return string[:-1]
 
 class TFClassifier(TFNeuralNetwork):
+
+    """
+    Classification model with Cross entropy loss function.
+    """
+
     __slots__ = TFNeuralNetwork.__slots__ + ['probabilities_']
 
     def __init__(self, log_dir, inputs_shape, outputs_shape, metric_functions={}, **kwargs):
         if len(metric_functions) == 0:
             def accuracy(outputs, labels_placeholder):
                 correct_prediction = tf.equal(tf.argmax(outputs, 1), tf.argmax(labels_placeholder, 1))
-                return tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+                return tf.reduce_mean(tf.cast(correct_prediction, tf.float32), name='accuracy')
             metric_functions['accuracy'] = accuracy
 
-        super(TFClassifier, self).__init__(log_dir, inputs_shape, outputs_shape, metric_functions, **kwargs)
+        super().__init__(log_dir, inputs_shape, outputs_shape, inputs_type=inputs_type, outputs_type=outputs_type, metric_functions=metric_functions, **kwargs)
         self.probabilities_ = tf.nn.softmax(self.outputs_)
-        self.sess_.run(tf.variables_initializer([self.probabilities_]))
         
     def loss_function(self, outputs, labels_placeholder, **kwargs):
         """Cross entropy."""
         return tf.losses.softmax_cross_entropy(labels_placeholder, outputs) 
 
+    @check_inputs_values
     def probabilities(self, inputs_values):
         """Get probabilites."""
-        assert(np.all(np.asarray(inputs_values.shape[1:]) == np.asarray(self.inputs_shape_)))
         return self.sess_.run(self.probabilities_, feed_dict={
             self.data_placeholder_: inputs_values,
         })
 
+    @check_inputs_values
     def classify(self, inputs_values):
         """Best prediction."""
-        assert(np.all(np.asarray(inputs_values.shape[1:]) == np.asarray(self.inputs_shape_)))
         return self.sess_.run(tf.argmax(self.probabilities_, 1), feed_dict={
             self.data_placeholder_: inputs_values,
         })
 
 class TFRegressor(TFNeuralNetwork):
 
-    def __init__(self, log_dir, inputs_shape, outputs_shape, metric_functions={}, **kwargs):
-        super(TFRegressor, self).__init__(log_dir, inputs_shape, outputs_shape, metric_functions, **kwargs)
+    """
+    Regression model with Mean squared loss function.
+    """
 
     def loss_function(self, outputs, labels_placeholder):
         """Mean squared error."""
@@ -596,74 +742,143 @@ class TFRegressor(TFNeuralNetwork):
 
 class TFEmbedding(TFNeuralNetwork):
 
-    def __init__(self, log_dir, inputs_shape, outputs_shape, metric_functions={}, **kwargs):
-        super(TFEmbeddingTripletLoss, self).__init__(log_dir, inputs_shape, outputs_shape, metric_functions, **kwargs)
+    """
+    Embedding model with Triplet loss function.
+    """
+
+    @staticmethod
+    def squared_distance(first_points, second_points):
+        """Pairwise squared distances between 2 sets of points."""
+        diff = tf.squared_difference(tf.expand_dims(first_points, 1), second_points)
+        return tf.reduce_sum(diff, axis=2)
+
+    def __init__(self, log_dir, inputs_shape, outputs_shape, inputs_type=tf.float32, outputs_type=tf.float32, reset_default_graph=True, metric_functions={}, **kwargs):
+
+        if len(metric_functions) == 0:
+            def max_accuracy(outputs, labels_placeholder):
+                # Calculate distances
+                embedding_pos, embedding_neg = tf.dynamic_partition(outputs, partitions=tf.reshape(labels_placeholder, [-1]), num_partitions=2)
+                pos_dist = TFEmbedding.squared_distance(embedding_pos, embedding_pos)
+                neg_dist = TFEmbedding.squared_distance(embedding_pos, embedding_neg)
+                tf.summary.histogram('pos_dist', pos_dist)
+                tf.summary.histogram('neg_dist', neg_dist)
+
+                def triplet_accuracy(pos_dist, neg_dist):
+                    """Triplet accuracy function for binary classification to positives and negatives."""
+                    def accuracy(threshold):
+                        correct_count = tf.count_nonzero(pos_dist < threshold) + tf.count_nonzero(neg_dist >= threshold)
+                        total_count = tf.shape(pos_dist)[0] * tf.shape(pos_dist)[1] + tf.shape(neg_dist)[0] * tf.shape(neg_dist)[1]
+                        return tf.cast(correct_count, dtype=tf.float32) / tf.cast(total_count, dtype=tf.float32)
+                    return accuracy
+
+                # Get all possible threshold values
+                total_dist = tf.reshape(tf.concat([pos_dist, neg_dist], 1), [-1])
+                thresholds = tf.unique(total_dist)[0]
+
+                # Calculate accuracy
+                accuracies = tf.map_fn(triplet_accuracy(pos_dist, neg_dist), thresholds)
+                return tf.reduce_max(accuracies)
+
+            metric_functions['max_accuracy'] = max_accuracy
+
+        # Reset default graph.
+        if reset_default_graph:
+            tf.reset_default_graph()
+
+        self.labels_placeholder_ = tf.placeholder(tf.int32, shape=[None], name='input_labels')
+        super().__init__(log_dir, inputs_shape, outputs_shape, inputs_type=inputs_type, outputs_type=outputs_type, reset_default_graph=False, metric_functions=metric_functions, **kwargs)
 
     def loss_function(self, outputs, labels_placeholder, **kwargs):
         """Compute the triplet loss by mini-batch of triplet embeddings."""
-        assert('margin' in kwargs)
-        
-        def squaredDistance(some, anchors):
-            """Pairwise squared distances between 2 sets of points."""
-            m = tf.tile(some, [tf.shape(anchors)[0], 1])
-            m = tf.reshape(m, [tf.shape(anchors)[0], -1, tf.shape(some)[1]])
-            m = tf.transpose(m, [1, 0, 2])
-            m = tf.squared_difference(m, anchors)
-            m = tf.transpose(m, [1, 0, 2])
-            m = tf.reduce_sum(m, axis=2)
-            return m
+        assert 'margin' in kwargs, \
+            'Argument \'margin\' should be passed: kwargs = %s' % kwargs
+        assert 'exclude_hard' in kwargs, \
+            'Argument \'exclude_hard\' should be passed: kwargs = %s' % kwargs
+        margin = kwargs['margin']
+        exclude_hard = kwargs['exclude_hard']
 
-        def anchorLoss(triplet_margin):
+        def triplet_loss(margin, exclude_hard):
             """Triplet loss function for a given anchor."""
-            def loss(x):
-                pos, neg = x
-                m = tf.tile(neg, [tf.shape(pos)[0]])
-                m = tf.reshape(m, [tf.shape(pos)[0], -1])
-                m = tf.transpose(m, [1, 0])
-                m = tf.negative(tf.subtract(m, pos))
-                m = tf.transpose(m, [1, 0])
-                m = tf.add(m, triplet_margin)
-                m = tf.maximum(m, float32(0.0))
-                m = tf.reduce_mean(m)        
-                return m
+            def loss(pos_neg_dist):
+                pos_dist, neg_dist = pos_neg_dist
+                raw_loss = tf.expand_dims(pos_dist, -1) - neg_dist + margin
+                mask = raw_loss > 0
+                if exclude_hard:
+                    mask = tf.logical_and(mask, raw_loss < margin)
+                valid_loss = raw_loss * tf.cast(mask, dtype=tf.float32)
+                return valid_loss
             return loss
 
-        embedding_pos, embedding_neg = tf.dynamic_partition(outputs, partitions=tf.reshape(labels_placeholder, [-1]), num_partitions=2)
-        embedding_pos_dist = squaredDistance(embedding_pos, embedding_pos)
-        embedding_neg_dist = squaredDistance(embedding_neg, embedding_pos)
-        loss = tf.reduce_mean(tf.map_fn(anchorLoss(kwargs['margin']), (embedding_pos_dist, embedding_neg_dist), dtype=tf.float32))
-        return loss
+        # Calculate distances
+        embedding_pos, embedding_neg = tf.dynamic_partition(outputs, partitions=self.labels_placeholder_, num_partitions=2)
+        pos_dist = TFEmbedding.squared_distance(embedding_pos, embedding_pos)
+        neg_dist = TFEmbedding.squared_distance(embedding_pos, embedding_neg)
+
+        # Calculate losses
+        losses = tf.map_fn(triplet_loss(margin, exclude_hard), (pos_dist, neg_dist), dtype=tf.float32)
+        return tf.reduce_mean(losses)
+
+    def fit(self, train_set, iteration_count,
+            optimizer=tf.train.RMSPropOptimizer,
+            learning_rate=0.001,
+            epoch_count=None,
+            val_set=None,
+            summarizing_period=1,
+            logging_period=100,
+            checkpoint_period=10000,
+            evaluation_period=10000):
+        """Train model."""
+        
+        assert isinstance(train_set, TFTripletset), \
+            'Training set should be object of TFTripletset type: type(train_set) = %s' % type(train_set)
+        if val_set is not None:
+            assert isinstance(val_set, TFTripletset), \
+                'Validation set should be object of TFTripletset type: type(val_set) = %s' % type(val_set)
+
+        super().fit(train_set=train_set, iteration_count=iteration_count,
+                    optimizer=optimizer,
+                    learning_rate=learning_rate,
+                    epoch_count=epoch_count,
+                    val_set=val_set,
+                    summarizing_period=summarizing_period,
+                    logging_period=logging_period,
+                    checkpoint_period=checkpoint_period,
+                    evaluation_period=evaluation_period)
 
     def evaluate(self, dataset):
         """Evaluate model."""
-        raise Exception('Evaluate function not implemented!')
-        return result
+        if isinstance(dataset, TFDataset):
+            warnings.warn('Evaluation function is not implemented for TFDataset!', Warning)
+            return {}
+        else:
+            return super().evaluate(dataset)
 
+    @check_inputs_values
     def visualize(self, inputs_values, var_name, labels=None):
         """Visualize embeddings in TensorBoard."""
-        assert(np.all(np.asarray(inputs_values.shape[1:]) == np.asarray(self.inputs_shape_)))
-        assert(labels is None or len(inputs_values) == len(labels))
+        if labels is not None:
+            assert len(inputs_values) == len(labels), \
+                'Inputs values and labels should be the same lengths: len(inputs_values) = %s, len(labels) = %s' % (len(inputs_values), len(labels))
 
         # Get visualization embeddings
         vis_embeddings = self.forward(inputs_values)
         if labels is not None:
             vis_labels = labels.flatten()
+        vis_name = tf.get_default_graph().unique_name(var_name, mark_as_used=False)
         
         # Input set for Embedded TensorBoard visualization
-        embedding_var = tf.Variable(tf.stack(vis_embeddings, axis=0), trainable=False, name=var_name)
-        self.sess_.run(tf.variables_initializer([embedding_var]))
+        vis_var = tf.Variable(tf.stack(vis_embeddings, axis=0), trainable=False, name=vis_name)
+        self.sess_.run(tf.variables_initializer([vis_var]))
 
-        # Add embedding tensorboard visualization. Need tensorflow version
-        # >= 0.12.0RC0
-        config = projector.ProjectorConfig()
-        embed= config.embeddings.add()
-        embed.tensor_name = tf.get_default_graph().unique_name(var_name, mark_as_used=False)
+        # Add embedding tensorboard visualization
+        embed = self.projector_config_.embeddings.add()
+        embed.tensor_name = vis_name + ':0'
         if labels is not None:
             embed.metadata_path = os.path.join(self.log_dir_, embed.tensor_name + '_metadata.tsv')
-        projector.visualize_embeddings(self.summary_writer_, config)
+        projector.visualize_embeddings(self.summary_writer_, self.projector_config_)
 
-        # Checkpoint configuration.
-        checkpoint_name = "vis-checkpoint"
+        # Checkpoint configuration
+        checkpoint_name = 'vis-checkpoint'
         checkpoint_file = os.path.join(self.log_dir_, checkpoint_name)
 
         # Save checkpoint
@@ -680,6 +895,5 @@ class TFEmbedding(TFNeuralNetwork):
                     else:
                         f.write('\n' + str(label))
 
-        # Print status info.
-        print("For watching embedding in TensorBoard run command:")
-        print("tensorboard --logdir '%s'" % self.log_dir_)
+        # Print status info
+        print('For watching in TensorBoard run command:\ntensorboard --logdir "%s"' % self.log_dir_)

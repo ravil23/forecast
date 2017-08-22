@@ -1,10 +1,12 @@
 import unittest
 import sys
+import os
 
 # Include additional module
-include_path = '../include'
-if include_path not in sys.path:
-    sys.path.append(include_path)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+include_dir = os.path.join(script_dir, '../include')
+if include_dir not in sys.path:
+    sys.path.append(include_dir)
 from tensorflow_oop import *
 
 class TestTFDataset(unittest.TestCase):
@@ -105,43 +107,43 @@ class TestTFDataset(unittest.TestCase):
 
         # Test only data
         batch = self.dataset1.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.data) == np.asarray([[1,2]])))
-        self.assertEqual(batch.labels, None)
+        self.assertTrue(np.all(np.asarray(batch.data_) == np.asarray([[1,2]])))
+        self.assertEqual(batch.labels_, None)
         batch = self.dataset1.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.data) == np.asarray([[3,4]])))
-        self.assertEqual(batch.labels, None)
+        self.assertTrue(np.all(np.asarray(batch.data_) == np.asarray([[3,4]])))
+        self.assertEqual(batch.labels_, None)
         batch = self.dataset1.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.data) == np.asarray([[5,6]])))
-        self.assertEqual(batch.labels, None)
+        self.assertTrue(np.all(np.asarray(batch.data_) == np.asarray([[5,6]])))
+        self.assertEqual(batch.labels_, None)
         batch = self.dataset1.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.data) == np.asarray([[1,2]])))
-        self.assertEqual(batch.labels, None)
+        self.assertTrue(np.all(np.asarray(batch.data_) == np.asarray([[1,2]])))
+        self.assertEqual(batch.labels_, None)
 
         # Test only labels
         batch = self.dataset2.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.labels) == np.asarray([[1]])))
-        self.assertEqual(batch.data, None)
+        self.assertTrue(np.all(np.asarray(batch.labels_) == np.asarray([[1]])))
+        self.assertEqual(batch.data_, None)
         batch = self.dataset2.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.labels) == np.asarray([[2]])))
-        self.assertEqual(batch.data, None)
+        self.assertTrue(np.all(np.asarray(batch.labels_) == np.asarray([[2]])))
+        self.assertEqual(batch.data_, None)
         batch = self.dataset2.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.labels) == np.asarray([[3]])))
-        self.assertEqual(batch.data, None)
+        self.assertTrue(np.all(np.asarray(batch.labels_) == np.asarray([[3]])))
+        self.assertEqual(batch.data_, None)
         batch = self.dataset2.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.labels) == np.asarray([[1]])))
-        self.assertEqual(batch.data, None)
+        self.assertTrue(np.all(np.asarray(batch.labels_) == np.asarray([[1]])))
+        self.assertEqual(batch.data_, None)
 
         # Test another batch size
         self.dataset3.set_batch_size(2)
         batch = self.dataset3.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.data) == np.asarray([[1,2],[3,4]])))
-        self.assertTrue(np.all(np.asarray(batch.labels) == np.asarray([[1],[2]])))
+        self.assertTrue(np.all(np.asarray(batch.data_) == np.asarray([[1,2],[3,4]])))
+        self.assertTrue(np.all(np.asarray(batch.labels_) == np.asarray([[1],[2]])))
         batch = self.dataset3.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.data) == np.asarray([[5,6],[1,2]])))
-        self.assertTrue(np.all(np.asarray(batch.labels) == np.asarray([[3],[1]])))
+        self.assertTrue(np.all(np.asarray(batch.data_) == np.asarray([[5,6],[1,2]])))
+        self.assertTrue(np.all(np.asarray(batch.labels_) == np.asarray([[3],[1]])))
         batch = self.dataset3.next_batch()
-        self.assertTrue(np.all(np.asarray(batch.data) == np.asarray([[3,4],[5,6]])))
-        self.assertTrue(np.all(np.asarray(batch.labels) == np.asarray([[2],[3]])))
+        self.assertTrue(np.all(np.asarray(batch.data_) == np.asarray([[3,4],[5,6]])))
+        self.assertTrue(np.all(np.asarray(batch.labels_) == np.asarray([[2],[3]])))
 
     def test_split(self):
         with self.assertRaises(AssertionError):
@@ -287,6 +289,48 @@ class TestTFDataset(unittest.TestCase):
         self.dataset3.unnormalize()
         self.assertFalse(self.dataset3.normalized_)
         self.assertTrue(np.all(self.dataset3.data_ == self.data))
+
+class TestTFTripletset(unittest.TestCase):
+    def setUp(self):
+        self.empty = TFTripletset()
+        self.data = [[1,2],[3,4],[5,6],[7,8],[9,10]]
+        self.labels = [1,2,2,3,3]
+        self.tripletset = TFTripletset(data=self.data, labels=self.labels)
+
+    def test_initialize(self):
+        with self.assertRaises(AssertionError):
+            self.empty.initialize(data=[1,2,3], labels=[[1,1], [2,2], [3,3]])
+        with self.assertRaises(AssertionError):
+            self.empty.initialize(data=[1,2,3], labels=None)
+        with self.assertRaises(AssertionError):
+            self.empty.initialize(data=None, labels=[[1,1], [2,2], [3,3]])
+
+    def test_batch_size(self):
+        with self.assertRaises(AssertionError):
+            self.tripletset.set_batch_size(1, -1)
+        with self.assertRaises(AssertionError):
+            self.tripletset.set_batch_size(1, 2)
+        self.tripletset.set_batch_size(3, 1)
+        self.assertEqual(self.tripletset.batch_positives_count_, 1)
+        self.assertEqual(self.tripletset.batch_negatives_count_, 2)
+
+    def test_next_batch(self):
+        self.tripletset.set_batch_size(3, 1)
+        batch = self.tripletset.next_batch()
+        self.assertTrue(np.count_nonzero(batch.labels_ == 0) == 1)
+        self.assertTrue(np.count_nonzero(batch.labels_ == 1) == 2)
+        self.assertTrue(np.asarray(batch.labels_).ndim == 1)
+        self.assertTrue(len(batch.labels_) == len(batch.data_))
+        batch = self.tripletset.next_batch()
+        self.assertTrue(np.count_nonzero(batch.labels_ == 0) == 1)
+        self.assertTrue(np.count_nonzero(batch.labels_ == 1) == 2)
+        self.assertTrue(np.asarray(batch.labels_).ndim == 1)
+        self.assertTrue(len(batch.labels_) == len(batch.data_))
+        batch = self.tripletset.next_batch()
+        self.assertTrue(np.count_nonzero(batch.labels_ == 0) == 1)
+        self.assertTrue(np.count_nonzero(batch.labels_ == 1) == 2)
+        self.assertTrue(np.asarray(batch.labels_).ndim == 1)
+        self.assertTrue(len(batch.labels_) == len(batch.data_))
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,7 +1,6 @@
 import argparse
 import pandas as pd
 import numpy as np
-import os
 import sys
 import datetime
 import warnings
@@ -12,30 +11,6 @@ include_path = '../include'
 if include_path not in sys.path:
     sys.path.append(include_path)
 from tensorflow_oop import *
-
-parser = argparse.ArgumentParser(description='Generate dataset.',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-parser.add_argument('--input', '-i', type=str, required=True,
-    help='path to raw data in csv format')
-parser.add_argument('--output', '-o', type=str, required=True,
-    help='path to saving dump of dataset')
-parser.add_argument('--feature_names', type=str, nargs='+', required=True,
-    help='column names for adding to dataset')
-parser.add_argument('--interpolate', default=False, action='store_true',
-    help='interpolate nan values')
-parser.add_argument('--normalize', default=False, action='store_true',
-    help='normalize features to zero mean and one std')
-parser.add_argument('--seq_length', default=32, type=int,
-    help='sequence length')
-parser.add_argument('--seq_step', default=32, type=int,
-    help='sequence iteration step')
-parser.add_argument('--label_length', default=1, type=int,
-    help='prediction label length')
-parser.add_argument('--label_offset', default=0, type=int,
-    help='offset of label after sequence end')
-
-args = parser.parse_args()
 
 def clean_file(filename):
     """
@@ -91,7 +66,7 @@ def load_dataframe(filename):
     df['RRR'] = pd.to_numeric(df['RRR'])
     return df
 
-if __name__ == '__main__':
+def run(args):
     print 'Cleaning...'
     cleaned_filename = clean_file(args.input)
     print 'Cleaned filename:', cleaned_filename, '\n'
@@ -100,15 +75,15 @@ if __name__ == '__main__':
     df = load_dataframe(cleaned_filename)
     print 'Loaded dataframe shape:', df.shape, '\n'
 
-    print 'Getting features...'
-    features = TFDataframe(df[args.feature_names])
-    print 'Features shape:', features.df_.shape, '\n'
-
     if args.interpolate:
         print 'Interpolating...'
-        nan_count = features.df_.isnull().sum()
-        features.interpolate()
+        nan_count = df.isnull().sum()
+        df = df.interpolate()
         print 'Interpolated NaN values count:\n', nan_count, '\n'
+
+    print 'Getting features...'
+    features = TFDataset(df[args.feature_names].values)
+    print 'Features set shape:', features.size_, features.data_shape_, '->', features.labels_shape_, '\n'
 
     if args.normalize:
         print 'Normalizing...'
@@ -125,3 +100,30 @@ if __name__ == '__main__':
     print 'Saving dataset...'
     dataset.save(args.output)
     print 'Dataset saved to:', args.output
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Generate dataset',
+                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    parser.add_argument('--input', '-i', type=str, required=True,
+        help='path to raw data in csv format')
+    parser.add_argument('--output', '-o', type=str, required=True,
+        help='path to saving dump of dataset')
+    parser.add_argument('--feature_names', type=str, nargs='+', required=True,
+        help='column names for adding to dataset')
+    parser.add_argument('--interpolate', default=False, action='store_true',
+        help='interpolate nan values')
+    parser.add_argument('--normalize', default=False, action='store_true',
+        help='normalize features to zero mean and one std')
+    parser.add_argument('--seq_length', default=32, type=int,
+        help='sequence length')
+    parser.add_argument('--seq_step', default=32, type=int,
+        help='sequence iteration step')
+    parser.add_argument('--label_length', default=1, type=int,
+        help='prediction label length')
+    parser.add_argument('--label_offset', default=0, type=int,
+        help='offset of label after sequence end')
+
+    args = parser.parse_args()
+
+    run(args)

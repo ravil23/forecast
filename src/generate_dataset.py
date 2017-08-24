@@ -7,10 +7,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Include additional module
-include_path = '../include'
+include_path = '../tensorflow_oop'
 if include_path not in sys.path:
     sys.path.append(include_path)
-from tensorflow_oop import *
+from tensorflow_oop.dataset import *
 
 def clean_file(filename):
     """
@@ -67,39 +67,40 @@ def load_dataframe(filename):
     return df
 
 def run(args):
-    print 'Cleaning...'
+    print('Cleaning...')
     cleaned_filename = clean_file(args.input)
-    print 'Cleaned filename:', cleaned_filename, '\n'
+    print('Cleaned filename: %s\n' % cleaned_filename)
 
-    print 'Loading...'
+    print('Loading...')
     df = load_dataframe(cleaned_filename)
-    print 'Loaded dataframe shape:', df.shape, '\n'
+    df_features = df[args.feature_names]
+    print('Loaded dataframe shape: %s\n' % str(df.shape))
 
     if args.interpolate:
-        print 'Interpolating...'
-        nan_count = df.isnull().sum()
-        df = df.interpolate()
-        print 'Interpolated NaN values count:\n', nan_count, '\n'
+        print('Interpolating...')
+        nan_count = df_features.isnull().sum()
+        df_features = df_features.interpolate()
+        print('Interpolated NaN values count:\n%s\n' % nan_count)
 
-    print 'Getting features...'
-    features = TFDataset(df[args.feature_names].values)
-    print 'Features set shape:', features.size_, features.data_shape_, '->', features.labels_shape_, '\n'
+    print('Converting to features set...')
+    features = TFDataset(df_features.values)
+    print('Features set shape: %s %s -> %s\n' % (features.size_, features.data_shape_, features.labels_shape_))
 
     if args.normalize:
-        print 'Normalizing...'
+        print('Normalizing...')
         features.normalize()
-        print 'Normalized with parameters:'
-        print '\tmean:\n', features.normalization_mean_
-        print '\tstd:\n', features.normalization_std_, '\n'
+        print('Normalized with parameters:')
+        print('\tmean: %s' % features.normalization_mean_)
+        print('\tstd: %s\n' % features.normalization_std_)
 
-    print 'Generating dataset...'
+    print('Generating dataset...')
     dataset = features.generate_sequences(args.seq_length, args.seq_step,
                                           args.label_length, args.label_offset)
-    print dataset, '\n'
+    print('Dataset shape: %s %s -> %s' % (dataset.size_, dataset.data_shape_, dataset.labels_shape_))
 
-    print 'Saving dataset...'
+    print('Saving dataset...')
     dataset.save(args.output)
-    print 'Dataset saved to:', args.output
+    print('Dataset saved to: %s\n' % args.output)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate dataset',

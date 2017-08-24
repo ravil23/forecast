@@ -8,10 +8,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Include additional module
-include_path = '../include'
+include_path = '../tensorflow_oop'
 if include_path not in sys.path:
     sys.path.append(include_path)
-from tensorflow_oop import *
+from tensorflow_oop.regression import *
 
 # Define model
 class TFWeatherForecast(TFRegressor):
@@ -19,10 +19,10 @@ class TFWeatherForecast(TFRegressor):
         input_size = self.inputs_shape_[0]
         hidden_size = kwargs['hidden_size']
         rnn_count = kwargs['rnn_count']
-        output_size = self.outputs_shape_[0]
+        output_size = self.outputs_shape_[-1]
         def rnn_cell():
             return tf.contrib.rnn.BasicLSTMCell(hidden_size, state_is_tuple=True)
-        cells = [rnn_cell() for _ in xrange(rnn_count)]
+        cells = [rnn_cell() for _ in range(rnn_count)]
         multi_cell = tf.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=True)
         batch_size = tf.shape(inputs)[0]
         init_state = multi_cell.zero_state(batch_size, dtype=tf.float32)
@@ -32,45 +32,44 @@ class TFWeatherForecast(TFRegressor):
                                                     time_major=False)
         W = tf.Variable(tf.truncated_normal([hidden_size, output_size]))
         b = tf.Variable(tf.zeros([output_size]))
-        outputs = tf.nn.xw_plus_b(rnn_outputs[:,-1], W, b)
+        outputs = tf.nn.xw_plus_b(last_state[-1].h, W, b)
         return tf.reshape(outputs, [-1] + self.outputs_shape_)
 
 def run(args):
-    print 'Loading dataset...'
-    dataset = TFDataset()
-    dataset.load(args.input)
-    print 'Dataset shape:', dataset.size_, dataset.data_shape_, '->', dataset.labels_shape_, '\n'
+    print('Loading dataset...')
+    dataset = TFDataset.load(args.input)
+    print('Dataset shape: %s %s -> %s\n' % (dataset.size_, dataset.data_shape_, dataset.labels_shape_))
 
     # Configure batch size
     dataset.set_batch_size(args.batch_size)
 
-    print 'Splitting...'
+    print('Splitting...')
     train_set, val_set, test_set = dataset.split(args.train_rate, args.val_rate, args.test_rate, shuffle=args.shuffle)
-    print 'Traininig  set shape:', train_set.size_, train_set.data_shape_, '->', train_set.labels_shape_
-    print 'Validation set shape:', val_set.size_, val_set.data_shape_, '->', val_set.labels_shape_
-    print 'Testing    set shape:', test_set.size_, test_set.data_shape_, '->', test_set.labels_shape_, '\n'
+    print('Traininig  set shape: %s %s -> %s'   % (train_set.size_, train_set.data_shape_, train_set.labels_shape_))
+    print('Validation set shape: %s %s -> %s'   % (val_set.size_,   val_set.data_shape_,   val_set.labels_shape_))
+    print('Testing    set shape: %s %s -> %s\n' % (test_set.size_,  test_set.data_shape_,  test_set.labels_shape_))
 
-    print 'Initializing...'
+    print('Initializing...')
     model = TFWeatherForecast(log_dir=args.log_dir,
                               inputs_shape=dataset.data_shape_,
                               outputs_shape=dataset.labels_shape_,
                               hidden_size=args.hidden_size,
                               rnn_count=args.rnn_count)
-    print model, '\n'
+    print('%s\n' % model)
 
     # Fitting model
-    model.fit(train_set, args.epoch_count, val_set=val_set)
+    model.fit(train_set, iteration_count=None, epoch_count=args.epoch_count, val_set=val_set)
 
-    print 'Evaluating...'
+    print('Evaluating...')
     if train_set is not None:
         train_eval = model.evaluate(train_set)
-        print 'Results on training set:', train_eval
+        print('Results on training set: %s' % train_eval)
     if val_set is not None:
         val_eval = model.evaluate(val_set)
-        print 'Results on validation set:', val_eval
+        print('Results on validation set: %s' % val_eval)
     if test_set is not None:
         test_eval = model.evaluate(test_set)
-        print 'Results on testing set:', test_eval
+        print('Results on testing set: %s' % test_eval)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train neural network',

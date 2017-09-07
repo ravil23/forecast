@@ -16,49 +16,64 @@ from tensorflow_oop.regression import *
 # Define model
 class TFWeatherForecast(TFRegressor):
     def inference(self, inputs, **kwargs):
-        input_size = self.inputs_shape_[0]
+        # Get parameters
+        input_size = self.inputs_shape[0]
         hidden_size = kwargs['hidden_size']
         rnn_count = kwargs['rnn_count']
-        output_size = self.outputs_shape_[-1]
+        output_size = self.outputs_shape[-1]
+
+        # Create RNN cells
         def rnn_cell():
             return tf.contrib.rnn.BasicLSTMCell(hidden_size, state_is_tuple=True)
         cells = [rnn_cell() for _ in range(rnn_count)]
         multi_cell = tf.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=True)
+        
+        # Stack RNN layers
         batch_size = tf.shape(inputs)[0]
         init_state = multi_cell.zero_state(batch_size, dtype=tf.float32)
         rnn_outputs, last_state = tf.nn.dynamic_rnn(cell=multi_cell,
                                                     initial_state=init_state,
                                                     inputs=inputs,
+                                                    swap_memory=True,
                                                     time_major=False)
-        W = tf.Variable(tf.truncated_normal([hidden_size, output_size]))
-        b = tf.Variable(tf.zeros([output_size]))
-        outputs = tf.nn.xw_plus_b(last_state[-1].h, W, b)
-        return tf.reshape(outputs, [-1] + self.outputs_shape_)
+
+        # Output layer
+        with tf.variable_scope('output'):
+            W = tf.Variable(tf.truncated_normal([hidden_size, output_size]),
+                            name='weight')
+            b = tf.Variable(tf.zeros([output_size]),
+                            name='bias')
+            outputs = tf.nn.xw_plus_b(last_state[-1].h, W, b)
+        return tf.reshape(outputs, [-1] + self.outputs_shape)
 
 def run(args):
     print('Loading dataset...')
     dataset = TFDataset.load(args.input)
-    print('Dataset shape: %s %s -> %s\n' % (dataset.size_, dataset.data_shape_, dataset.labels_shape_))
+    print('Dataset shape: %s' % dataset.str_shape())
 
     # Configure batch size
     dataset.set_batch_size(args.batch_size)
 
     print('Splitting...')
-    train_set, val_set, test_set = dataset.split(args.train_rate, args.val_rate, args.test_rate, shuffle=args.shuffle)
-    print('Traininig  set shape: %s %s -> %s'   % (train_set.size_, train_set.data_shape_, train_set.labels_shape_))
-    print('Validation set shape: %s %s -> %s'   % (val_set.size_,   val_set.data_shape_,   val_set.labels_shape_))
-    print('Testing    set shape: %s %s -> %s\n' % (test_set.size_,  test_set.data_shape_,  test_set.labels_shape_))
+    train_set, val_set, test_set = dataset.split(args.train_rate,
+                                                 args.val_rate,
+                                                 args.test_rate,
+                                                 shuffle=args.shuffle)
+    print('Traininig  set shape: %s' % train_set.str_shape())
+    print('Validation set shape: %s' % val_set.str_shape())
+    print('Testing    set shape: %s' % test_set.str_shape())
 
     print('Initializing...')
-    model = TFWeatherForecast(log_dir=args.log_dir,
-                              inputs_shape=dataset.data_shape_,
-                              outputs_shape=dataset.labels_shape_,
-                              hidden_size=args.hidden_size,
-                              rnn_count=args.rnn_count)
+    model = TFWeatherForecast(log_dir=args.log_dir)
+    model.initialize(inputs_shape=dataset.data_shape,
+                     targets_shape=dataset.labels_shape,
+                     outputs_shape=dataset.labels_shape,
+                     hidden_size=args.hidden_size,
+                     rnn_count=args.rnn_count)
     print('%s\n' % model)
 
     # Fitting model
-    model.fit(train_set, iteration_count=None, epoch_count=args.epoch_count, val_set=val_set)
+    model.fit(train_set, epoch_count=args.epoch_count, val_set=val_set)
 
     print('Evaluating...')
     if train_set is not None:
@@ -73,7 +88,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train neural network',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('--input', '-i', type=str, required=True,
         help='path to dump of dataset')

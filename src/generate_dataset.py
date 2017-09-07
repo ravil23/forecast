@@ -84,27 +84,27 @@ def run(args):
 
     print('Converting to features set...')
     features = TFDataset(df_features.values)
-    print('Features set shape: %s %s -> %s\n' % (features.size_, features.data_shape_, features.labels_shape_))
+    print('Features set shape: %s' % (features.str_shape()))
 
     if args.normalize:
         print('Normalizing...')
         features.normalize()
         print('Normalized with parameters:')
-        print('\tmean: %s' % features.normalization_mean_)
-        print('\tstd: %s\n' % features.normalization_std_)
+        print('\tmean: %s' % features.normalization_mean)
+        print('\tstd: %s\n' % features.normalization_std)
 
     print('Generating dataset...')
     dataset = features.generate_sequences(args.seq_length, args.seq_step,
                                           args.label_length, args.label_offset)
-    print('Dataset shape: %s %s -> %s' % (dataset.size_, dataset.data_shape_, dataset.labels_shape_))
+    print('Dataset shape: %s' % (dataset.str_shape()))
 
     print('Saving dataset...')
     dataset.save(args.output)
-    print('Dataset saved to: %s\n' % args.output)
+    print('Dataset saved to: %s' % args.output)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate dataset',
-                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+                    formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument('--input', '-i', type=str, required=True,
         help='path to raw data in csv format')
